@@ -71,6 +71,34 @@ Consequences for Linux:
 
 ## 2. Target architecture [D]
 
+### 2.0 Quickshell build (current) [D, 2026-10-19]
+
+**This supersedes the Tauri + Node design below for Omarchy.** Omarchy's desktop (bar, menus, launcher, notifications, lock screen) runs in one long-lived Quickshell process, `omarchy-shell`, whose features are plugins. oma-launcher is one more plugin there, built the way Omarchy builds its own menu and emoji picker. The reasons:
+- **No external dependencies.** No Tauri, WebKitGTK, Node runtime, npm packages or native SQLite modules. It needs only what Omarchy already ships: Quickshell, Qt, bash, socat and Hyprland.
+- **Native look.** The plugin reads the active Omarchy theme's `[menu]` tokens (`qs.Commons.Color`, `Style`), so `omarchy theme set` restyles it live with no theme parser.
+- **Speed.** The shell process is always warm. A hotkey reaches the plugin as a Hyprland global shortcut with no process spawn, and the CLI goes through the shell's socket (about 5 ms).
+
+```
+omarchy-shell (Quickshell, one process)
+ └─ plugin typecraft.oma-launcher   (~/.config/omarchy/plugins/<link> → repo/plugin)
+     ├─ Launcher.qml        lifecycle open()/close(), ShellIpc target "oma-launcher", GlobalShortcut oma-launcher:toggle
+     ├─ ui/                 launcher surface on Omarchy's OverlayWindow (wlr-layer-shell, namespace "oma-launcher")
+     ├─ Backend.qml         the "backend": paths, config.json, stores, method registry
+     ├─ services/           QML services with I/O (JsonStore = FileView + migrations; later clipboard, apps…)
+     └─ core/*.js           pure logic, no Qt: Rpc, Paths, Migrate, Log, Schema. Unit-tested with `node --test`
+bin/oma-launcher                bash CLI → omarchy-shell oma-launcher <fn> (socket), plus install/reload/doctor/setup
+```
+
+How the rest of this spec maps onto it:
+- **§3 IPC.** There is no wire protocol between UI and backend; both live in one QML engine. The *method surface* stays: services register `namespace.method` handlers in one registry (`core/Rpc.js`), using Raycast's names (§3.4). `call()` returns a Promise and `callSync()` returns `{ok,data|error}`. Notifications (`window.visibilityChanged`, `settings.generalSettingsChanged`) go through `subscribe()`/`emit()`. External callers use `ShellIpc` (`oma-launcher call <method> <json>`). The NDJSON host↔backend contract and supervisor (§3.3) are **deferred to Phase 5**: only Raycast extensions need Node, and they will run as a supervised child `Process` that speaks §3.3/§9.2.
+- **§4 platform.** Omarchy = Hyprland, so Phase 0 targets Hyprland only. Its config is **Lua** (`hyprland.lua`, `o.bind(...)`, `hl.dsp.global(...)`), not `.conf`.
+- **§5.1 window.** It uses Omarchy's `OverlayWindow`: a fullscreen transparent layer surface with exclusive keyboard focus, and the 750×475 card drawn inside it. Clicking outside the card counts as focus loss. The surface is mapped fresh on every open, which is how Omarchy avoids stale surfaces when monitors change.
+- **§6 data.** Persisted state is one versioned JSON document per store under `$XDG_DATA_HOME/oma-launcher/db/` (`core/Migrate.js`: numbered migrations, history, atomic writes, never overwrite an unreadable or newer file). There is **no encryption at rest** and no libsecret key: Qt's FileView has no cipher, and full-disk encryption is the Omarchy default. If a store outgrows JSON (clipboard history, file index), revisit with Qt's built-in `QtQuick.LocalStorage` (SQLite) before adding a native dependency.
+- **§10 frontend.** QML instead of React, with themes from Omarchy's tokens. The 8 Raycast themes (§10.4) become optional palettes over the same tokens.
+- **Logging** goes to the shell's log (`qs log -n -p "$OMARCHY_PATH/shell"`, lines prefixed `[oma-launcher]`), with the level from `config.json`. There are no separate log files.
+
+The original Tauri design follows, kept for reference and for non-Omarchy targets.
+
 ```
 ┌──────────────────────── <app> (Tauri 2, Rust) ─────────────────────────┐
 │ WebKitGTK webviews: main launcher, settings, notes, theme studio, HUD  │
@@ -109,7 +137,7 @@ Why this shape:
 - **A Node backend is unavoidable**: Raycast extensions are Node/React programs. Putting the rest of the business logic there too mirrors Raycast and keeps one language for the services.
 - Write the host in Rust, not Node, for anything that needs Wayland protocols, uinput/evdev, D-Bus signals or low latency.
 
-**Working name:** `<app>` throughout. Pick one, e.g. `raylinux`. Use app id `dev.<you>.<App>` and binary `<app>`.
+**Working name:** `<app>` throughout. Pick one, e.g. `oma-launcher`. Use app id `dev.<you>.<App>` and binary `<app>`.
 
 ---
 
@@ -712,7 +740,14 @@ Repo layout [D]:
   docs/spec/            # this folder
 ```
 
-### Phase 0: Skeleton and IPC
+### Phase 0: Skeleton and IPC (Quickshell build, §2.0) [D]
+- Omarchy shell plugin `typecraft.oma-launcher` (`plugin/`, kind `menu` so the shell hands it the shared app library, `keepLoaded`). `bin/oma-launcher install` links it into `~/.config/omarchy/plugins/` and enables it.
+- Launcher surface (750×475, 66 header, 42 footer) on the active Omarchy theme. It starts hidden and is toggled by `oma-launcher toggle`, `omarchy-shell oma-launcher toggle` or the global shortcut `oma-launcher:toggle` (`oma-launcher setup hyprland` binds Alt+Space).
+- In-process backend: method registry with Raycast names, `system.healthPing`, `system.healthDatabase`, `system.info`, `system.getPaths`, `settings.getGeneralSettings` / `updateGeneralSettings`, and notifications. The footer shows a live `system.healthPing` round trip.
+- XDG paths (§6.3), `config.json` (hot reload), logging to the shell log, and versioned JSON stores with a migrations framework.
+- **Accept:** `oma-launcher toggle` shows and hides in under 100 ms warm, measured from the CLI call to Hyprland's `openlayer`/`closelayer` event (`tests/smoke.sh`). A backend error or an unreadable store never takes the launcher down: calls answer `{ok:false,error}`, and the store goes read-only without overwriting the file, then recovers when the file is fixed. `node --test tests/` covers the registry, paths, migrations and logging.
+
+### Phase 0 (original Tauri plan, superseded for Omarchy)
 - Tauri app with a main window. Hidden at start, toggled by `<app> toggle` (D-Bus single instance).
 - Node backend supervisor and NDJSON per §3.3, including `initialize`, checkpoints, health ping and restart.
 - Frontend `ipc` Proxy (§3.2) and a demo round trip `system.healthPing`.
@@ -721,11 +756,20 @@ Repo layout [D]:
 
 ### Phase 1: Launcher shell and root search
 - Window behaviour (§5.1): Hyprland rules + generic toplevel, focus-loss hide, pop-to-root timer, keystroke buffering, compact mode.
+  - Quickshell build: the layer surface maps about 25 ms after the call, and keys sent before that go to the window underneath. Phase 0 measured this with `wtype`, which types faster than a person. Buffering needs a surface that already holds keyboard focus at the keypress. One option is a pre-mapped, input-transparent layer that takes `Exclusive` focus on show; it must survive monitor hot-plug, which is why Omarchy's OverlayWindow remaps on every open.
 - Theme system with the 8 themes and CSS variables (§10.4). Inter/JetBrains Mono.
 - Declarative catalog. Applications provider (`.desktop`) plus System Settings panels.
 - Root search per §7, ported exactly, with unit tests built from ref 02 §4 (fuzzy scores, thresholds, comparator), frecency, aliases, favorites, sections, fallback commands.
 - Action panel, footer, toasts, HUD window, alerts, navigation stack, all shortcuts in §10.3.
 - **Accept:** type "fir" → Firefox first. Launching bumps frecency. Alias "ff" → exact top. Ctrl+K opens actions. Esc behaviour matches the setting. Golden tests for the ranker.
+- **Quickshell build [D, 2026-10-19]:**
+  - **Omarchy menu.** Every item from `omarchy-menu.jsonc` (default plus the user's `~/.config/omarchy/extensions/` file) is a root-search command (`plugin/core/OmarchyMenu.js`). Its subtitle is the breadcrumb ("Trigger › Toggle"). `when` guards hide rows, `checked` adds ✓, and `disabled` dims a row. The `fonts` and `power-profiles` provider rows are searchable too. Top-level menus show in the empty root's Commands section; deeper items appear only while searching. Opening a submenu pushes it as a view, and Ctrl+↵ opens the item in the original Omarchy menu.
+  - **Apps** come from the shell's `appLibrary`, which handles hidden entries, icons and `uwsm-app` launching.
+  - **Themes.** The 8 Raycast themes and the CSS variables are replaced by the live Omarchy theme tokens (§2.0).
+  - **HUD.** The HUD is Omarchy's OSD (`omarchy-shell osd show`).
+  - **Settings.** There is no settings window yet (Phase 2); aliases are set from the action panel.
+  - **Not done:** vim navigation bindings (Ctrl+K would clash with the action panel), Ctrl+P dropdown, Ctrl+T toast focus, Ctrl+Shift+K about panel, inline argument pills (no command declares arguments yet), alerts (no destructive action needs one yet), and keystroke buffering (see the note above).
+  - **"fir" → Firefox:** on a list where another title starts with "Fire", the literal port ties at score 8 and the collator decides until Firefox has been launched once (`tests/ranker.test.js`).
 
 ### Phase 2: Core built-ins
 - Calculator (fend) with inline result + history.
