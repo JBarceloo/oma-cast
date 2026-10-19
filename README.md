@@ -1,11 +1,11 @@
 <div align="center">
 
-# oma-launcher
+# oma-cast
 
 **A Raycast-style launcher for [Omarchy](https://omarchy.org).**
 It learns what you use, searches your apps and every Omarchy action, and looks like it shipped with your theme.
 
-<img src="docs/screenshots/hero.png" alt="oma-launcher showing suggestions for apps and Omarchy commands" width="760">
+<img src="docs/screenshots/hero.png" alt="oma-cast showing suggestions for apps and Omarchy commands" width="760">
 
 </div>
 
@@ -13,7 +13,7 @@ It learns what you use, searches your apps and every Omarchy action, and looks l
 
 ## Why
 
-Omarchy's built-in menu is great at what it does. oma-launcher adds what Raycast users miss on Linux:
+Omarchy's built-in menu is great at what it does. oma-cast adds what Raycast users miss on Linux:
 
 * **Learns your habits.** Results are ranked with a port of Raycast's root-search algorithm, plus frecency and learned search terms. The things you actually use float to the top, and if you type `ff` and pick Firefox, `ff` keeps meaning Firefox.
 * **One search for everything.** Your apps, all ~400 Omarchy menu actions (with breadcrumbs and live ✓ state), and web-search fallbacks, all in one ranked list.
@@ -41,9 +41,9 @@ Omarchy's built-in menu is great at what it does. oma-launcher adds what Raycast
 
 ### Follows your Omarchy theme
 
-There's no theme config. oma-launcher binds to Omarchy's own colours, so it changes the moment you switch themes.
+There's no theme config. oma-cast binds to Omarchy's own colours, so it changes the moment you switch themes.
 
-<img src="docs/screenshots/themes.png" alt="oma-launcher in Tokyo Night, Gruvbox, Rose Pine, Flexoki Light, Everforest and Osaka Jade">
+<img src="docs/screenshots/themes.png" alt="oma-cast in Tokyo Night, Gruvbox, Rose Pine, Flexoki Light, Everforest and Osaka Jade">
 
 ## Install
 
@@ -52,14 +52,14 @@ Requires Omarchy 4 (Hyprland 0.56+, `omarchy-shell`) and `socat`, which Omarchy 
 ```sh
 git clone https://github.com/typecraft-dev/oma-cast.git
 cd oma-cast
-bin/oma-launcher install          # link the plugin into omarchy-shell and the CLI into ~/.local/bin
-oma-launcher setup hyprland       # bind Alt+Space
-oma-launcher doctor               # check everything is wired up
+bin/oma-cast install          # link the plugin into omarchy-shell and the CLI into ~/.local/bin
+oma-cast setup hyprland       # bind Alt+Space
+oma-cast doctor               # check everything is wired up
 ```
 
-Press **Alt+Space**. Super+Space stays the Omarchy menu. If you'd rather have oma-launcher there, the swap is in `~/.config/hypr/oma-launcher.lua`, commented out.
+Press **Alt+Space**. Super+Space stays the Omarchy menu. If you'd rather have oma-cast there, the swap is in `~/.config/hypr/oma-cast.lua`, commented out.
 
-To remove it: `oma-launcher uninstall`.
+To remove it: `oma-cast uninstall`.
 
 ## Keyboard
 
@@ -80,15 +80,15 @@ To remove it: `oma-launcher uninstall`.
 ## CLI
 
 ```sh
-oma-launcher toggle | show | hide
-oma-launcher run <commandId>         # e.g. app:com.mitchellh.ghostty, omarchy:style.theme
-oma-launcher call <method> [json]    # call any backend method
-oma-launcher doctor
+oma-cast toggle | show | hide
+oma-cast run <commandId>         # e.g. app:com.mitchellh.ghostty, omarchy:style.theme
+oma-cast call <method> [json]    # call any backend method
+oma-cast doctor
 ```
 
 ## Roadmap
 
-oma-launcher is early. Search, ranking and the Omarchy integration are done. Coming next:
+oma-cast is early. Search, ranking and the Omarchy integration are done. Coming next:
 
 - [ ] Settings window
 - [ ] Script Commands
@@ -104,11 +104,11 @@ The full plan is in [`SPEC.md`](SPEC.md).
 ```sh
 node --test tests/        # unit tests, no npm install needed
 tests/smoke.sh            # live checks against the running shell
-oma-launcher dev          # reload on every save
+oma-cast dev          # reload on every save
 ```
 
-Quickshell caches QML for the life of the process, so run `oma-launcher reload` after editing anything under `plugin/`. See [`CLAUDE.md`](CLAUDE.md) for the layout and conventions.
+Quickshell caches QML for the life of the process, so run `oma-cast reload` after editing anything under `plugin/`. See [`CLAUDE.md`](CLAUDE.md) for the layout and conventions.
 
 ## Notes
 
-oma-launcher is an independent, clean-room project. It isn't affiliated with or endorsed by Raycast, and it contains no Raycast code or assets. It never contacts Raycast's servers, has no telemetry and no AI features.
+oma-cast is an independent, clean-room project. It isn't affiliated with or endorsed by Raycast, and it contains no Raycast code or assets. It never contacts Raycast's servers, has no telemetry and no AI features.

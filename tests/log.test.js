@@ -10,6 +10,6 @@ test("levels filter by threshold, unknown levels count as info", () => {
 })
 
 test("lines carry level, category and one-line metadata", () => {
-  assert.equal(Log.format("warning", "store", "slow", { ms: 3 }), '[oma-launcher] [warning] [store] slow {"ms":3}')
-  assert.equal(Log.format("info", "", "hi"), "[oma-launcher] [info] hi")
+  assert.equal(Log.format("warning", "store", "slow", { ms: 3 }), '[oma-cast] [warning] [store] slow {"ms":3}')
+  assert.equal(Log.format("info", "", "hi"), "[oma-cast] [info] hi")
 })

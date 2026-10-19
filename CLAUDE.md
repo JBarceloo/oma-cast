@@ -30,11 +30,11 @@ Spec legend: **[O]** observed in Raycast, **[I]** inferred, **[D]** design decis
 - Build **phase by phase** following `SPEC.md §12` (Phase 0 → 9). A phase is done only when its **Accept** checks pass. Then move on.
 - After each phase, update the **Status** section at the bottom of this file: what works, what's stubbed, and any deviations from the spec.
 - If the reference docs don't answer a question, choose a sensible value, mark it `[I]` or `[D]` in a code comment, and keep going. Raycast.app is not on the Omarchy machine. Re-running the reverse-engineering only works on the Mac where `/Applications/Raycast.app` lives.
-- The working name is **`oma-launcher`**: plugin id `typecraft.oma-launcher`, CLI `oma-launcher`, IPC target `oma-launcher`, layer namespace `oma-launcher`, URL scheme `oma-launcher://` (later). Also register `raycast://` for extension deep links (SPEC §5.5).
+- The working name is **`oma-cast`**: plugin id `typecraft.oma-cast`, CLI `oma-cast`, IPC target `oma-cast`, layer namespace `oma-cast`, URL scheme `oma-cast://` (later). Also register `raycast://` for extension deep links (SPEC §5.5).
 
 ## Architecture: an Omarchy shell plugin (SPEC §2.0)
 
-oma-launcher runs **inside `omarchy-shell`**, Omarchy's long-lived Quickshell process, as the plugin `typecraft.oma-launcher`. That is how Omarchy builds its own menu, emoji picker and clipboard overlays. **Keep external dependencies near zero:** QML and plain JS only, using what Omarchy already ships (Quickshell, Qt, bash, socat, Hyprland). No Tauri, Node runtime, npm packages or native modules without asking first. The Tauri/Node design in SPEC §2 is kept for reference only.
+oma-cast runs **inside `omarchy-shell`**, Omarchy's long-lived Quickshell process, as the plugin `typecraft.oma-cast`. That is how Omarchy builds its own menu, emoji picker and clipboard overlays. **Keep external dependencies near zero:** QML and plain JS only, using what Omarchy already ships (Quickshell, Qt, bash, socat, Hyprland). No Tauri, Node runtime, npm packages or native modules without asking first. The Tauri/Node design in SPEC §2 is kept for reference only.
 
 To learn the host, read the shell's own code in `$OMARCHY_PATH/shell/` (`/usr/share/omarchy/shell`):
 - `shell.qml`: plugin loading, `summon`/`hide`/`toggle`, and the scoped `shell` API
@@ -49,14 +49,14 @@ To learn the host, read the shell's own code in `$OMARCHY_PATH/shell/` (`/usr/sh
 ```
 SPEC.md, reference/      # the spec
 plugin/                  # the Omarchy shell plugin (what gets linked into ~/.config/omarchy/plugins/)
-  manifest.json          #   id typecraft.oma-launcher, kind "menu" (so the shell passes shell.appLibrary), keepLoaded
-  Launcher.qml           #   entry point: open()/close() from the shell, ShellIpc "oma-launcher", GlobalShortcut oma-launcher:toggle
+  manifest.json          #   id typecraft.oma-cast, kind "menu" (so the shell passes shell.appLibrary), keepLoaded
+  Launcher.qml           #   entry point: open()/close() from the shell, ShellIpc "oma-cast", GlobalShortcut oma-cast:toggle
   Backend.qml            #   in-process backend: paths, config.json, stores, method registry, notifications
   ui/                    #   launcher surface and (later) views
   services/              #   QML services that do I/O (JsonStore, OmarchyMenuSource; later clipboard, …)
   core/*.js              #   pure logic, no Qt imports: shared by QML and node tests (module.exports guard)
                          #   Ranker, Frecency (ref 02 §4, port exactly), OmarchyMenu, RootSearch, Schema, Migrate, Rpc, Paths, Log
-bin/oma-launcher             # bash CLI
+bin/oma-cast             # bash CLI
 tests/*.test.js          # node --test unit tests for plugin/core (ranker, frecency, Omarchy menu, root search, …)
 tests/smoke.sh           # live acceptance check against the running shell
 ```
@@ -70,39 +70,39 @@ node --test tests/           # unit tests (node's built-in runner; no npm instal
 tests/smoke.sh               # live checks: doctor, IPC, toggle latency (<100 ms). Shows/hides the launcher, never types.
 omarchy plugin validate plugin
 
-bin/oma-launcher install         # link plugin into ~/.config/omarchy/plugins, enable it, link CLI into ~/.local/bin
-bin/oma-launcher reload          # pick up QML/JS edits (see "Reloading" below)
-bin/oma-launcher dev             # reload on every save under plugin/ (needs inotifywait)
-bin/oma-launcher uninstall
+bin/oma-cast install         # link plugin into ~/.config/omarchy/plugins, enable it, link CLI into ~/.local/bin
+bin/oma-cast reload          # pick up QML/JS edits (see "Reloading" below)
+bin/oma-cast dev             # reload on every save under plugin/ (needs inotifywait)
+bin/oma-cast uninstall
 
-oma-launcher toggle | show | hide
-oma-launcher run <commandId>             # Phase 1+
-oma-launcher call <method> [json]        # any backend method, e.g. oma-launcher call system.info
-oma-launcher doctor
-oma-launcher setup hyprland              # writes ~/.config/hypr/oma-launcher.lua (Alt+Space) and requires it from hyprland.lua
+oma-cast toggle | show | hide
+oma-cast run <commandId>             # Phase 1+
+oma-cast call <method> [json]        # any backend method, e.g. oma-cast call system.info
+oma-cast doctor
+oma-cast setup hyprland              # writes ~/.config/hypr/oma-cast.lua (Alt+Space) and requires it from hyprland.lua
 
-qs log -n -p "$OMARCHY_PATH/shell" -t 50    # shell log; our lines start with [oma-launcher]
+qs log -n -p "$OMARCHY_PATH/shell" -t 50    # shell log; our lines start with [oma-cast]
 ```
 
-**Reloading.** Quickshell keeps every QML/JS file it has read, keyed by path, for the life of the process, and the shell's inotify watch doesn't follow the symlink into this repo. So editing files under `plugin/` changes nothing until `oma-launcher reload` re-links the plugin under a fresh `typecraft.oma-launcher.dev-<ns>` path. Always reload, then check `qs log` for QML errors, before concluding a change works. A QML error shows up as "Type X unavailable" plus the real cause on the next line. Names that clash with JS globals (such as `escape`) are "Illegal method name".
+**Reloading.** Quickshell keeps every QML/JS file it has read, keyed by path, for the life of the process, and the shell's inotify watch doesn't follow the symlink into this repo. So editing files under `plugin/` changes nothing until `oma-cast reload` re-links the plugin under a fresh `typecraft.oma-cast.dev-<ns>` path. Always reload, then check `qs log` for QML errors, before concluding a change works. A QML error shows up as "Type X unavailable" plus the real cause on the next line. Names that clash with JS globals (such as `escape`) are "Illegal method name".
 
 ## Running on Omarchy
 
 Check each of these on the machine instead of assuming it; Omarchy changes often.
 
-- **Hyprland config is Lua** (Hyprland 0.56). `~/.config/hypr/hyprland.lua` `require`s `default.hypr.omarchy` and the user's `hypr.bindings` etc. Bindings use `o.bind("ALT + SPACE", "desc", dispatcher)`. `oma-launcher setup hyprland` writes only `~/.config/hypr/oma-launcher.lua` and appends one `require("hypr.oma-launcher")`. Never edit Omarchy's files.
-- **Hotkey.** Super+Space is the Omarchy menu and Super+Alt+Space is the dock's app grid. oma-launcher defaults to **Alt+Space** through `hl.dsp.global("oma-launcher:toggle")`, so the plugin's GlobalShortcut fires with no process spawn. Offer the Super+Space swap (commented in `oma-launcher.lua`); never force it.
-- **IPC.** `omarchy-shell <target> <fn> args…` answers over the shell's socket (needs `socat`), falling back to `qs ipc`. Our target is `oma-launcher`. `ShellIpc` functions must have typed params and return a string.
+- **Hyprland config is Lua** (Hyprland 0.56). `~/.config/hypr/hyprland.lua` `require`s `default.hypr.omarchy` and the user's `hypr.bindings` etc. Bindings use `o.bind("ALT + SPACE", "desc", dispatcher)`. `oma-cast setup hyprland` writes only `~/.config/hypr/oma-cast.lua` and appends one `require("hypr.oma-cast")`. Never edit Omarchy's files.
+- **Hotkey.** Super+Space is the Omarchy menu and Super+Alt+Space is the dock's app grid. oma-cast defaults to **Alt+Space** through `hl.dsp.global("oma-cast:toggle")`, so the plugin's GlobalShortcut fires with no process spawn. Offer the Super+Space swap (commented in `oma-cast.lua`); never force it.
+- **IPC.** `omarchy-shell <target> <fn> args…` answers over the shell's socket (needs `socat`), falling back to `qs ipc`. Our target is `oma-cast`. `ShellIpc` functions must have typed params and return a string.
 - **Theme.** Bind colours to `Commons.Color.menu.*` and sizes to `Style.*`. They follow `omarchy theme set` live; no theme parsing.
 - **App launching.** Use `shell.appLibrary.launch(id, name)`. It goes through `uwsm-app -- gtk-launch`, sends terminal apps to `omarchy-launch-tui`, and shows Omarchy's launch OSD. The shell only provides `appLibrary` to `menu`-kind plugins.
 - **Terminals and paste.** Alacritty/Ghostty/Kitty need Ctrl+Shift+V (SPEC §5.3). Read the class from `hyprctl activewindow -j`.
 - **Notifications** go to the Omarchy shell's notification service (`org.freedesktop.Notifications`). The bar has a tray widget (SNI).
-- **Snippet expansion** needs the `input` group or a uinput udev rule. Keep it opt-in; `oma-launcher doctor` explains it.
+- **Snippet expansion** needs the `input` group or a uinput udev rule. Keep it opt-in; `oma-cast doctor` explains it.
 - **Testing on the live desktop.** Don't synthesize keystrokes (`wtype`) unless the launcher is already mapped and focused. Keys sent within about 25 ms of `show` go to the window underneath, which is usually the terminal running Claude.
 
 ## Status
 
-Renamed **raylinux → oma-launcher** on 2026-10-19 (plugin `typecraft.oma-launcher`, CLI `oma-launcher`, IPC target and global shortcut `oma-launcher:toggle`, XDG dirs `oma-launcher`). The app icon is Omarchy's logo: glyph `\ue900` in the `omarchy` font, the same one the bar's menu button uses.
+Renamed **raylinux → oma-launcher → oma-cast** on 2026-10-19 (plugin `typecraft.oma-cast`, CLI `oma-cast`, IPC target and global shortcut `oma-cast:toggle`, XDG dirs `oma-cast`). The app icon is Omarchy's logo: glyph `\ue900` in the `omarchy` font, the same one the bar's menu button uses.
 
 **Phase 1 (Quickshell build): done**, with the gaps listed below. **Phase 0: done.** Omarchy 4.0.0.alpha, Quickshell 0.3.2, Hyprland 0.56.2.
 
@@ -127,8 +127,8 @@ Works:
 Stubbed / not yet:
 - Keystroke buffering before the surface maps. Keys sent within ~40 ms of the hotkey go to the window underneath.
 - Vim navigation bindings, Ctrl+P dropdown, Ctrl+T, Ctrl+Shift+K, inline argument pills, alerts.
-- No settings window, so you can't re-enable a disabled command except by editing `~/.local/share/oma-launcher/db/settings.json` (delete its `enabled: false`). That's Phase 2.
-- No deep links (`oma-launcher://`); Phase 2 or 9.
+- No settings window, so you can't re-enable a disabled command except by editing `~/.local/share/oma-cast/db/settings.json` (delete its `enabled: false`). That's Phase 2.
+- No deep links (`oma-cast://`); Phase 2 or 9.
 
 Deviations from the original spec (SPEC §2.0 and the Phase 1 note in §12):
 - A Quickshell plugin instead of Tauri + Node; there's no NDJSON supervisor until Phase 5.
