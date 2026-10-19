@@ -53,7 +53,28 @@ OverlayWindow {
   readonly property bool atRoot: window.stack.length === 1
   readonly property bool compact: window.general.windowMode === "compact" && window.atRoot && !window.query
   readonly property string placeholder: window.view.kind === "alias" ? "Type an alias, then press ↵"
-    : (window.view.kind === "menu" ? "Search " + window.view.title + "…" : "Search for apps and commands…")
+    : (window.view.kind === "menu" ? "Search " + window.view.title + "…"
+      : (window.view.kind === "files" ? "Search files…" : "Search for apps and commands…"))
+
+  readonly property var filesStatus: {
+    window.backend.filesStatusRevision
+    window.backend.ready
+    window.backend.filesSettings.enabled
+    var r = window.backend.callSync("files.status", null)
+    return r.ok ? r.data : ({})
+  }
+
+  function emptyTitle() {
+    if (window.view.kind === "alias") return window.view.title
+    if (window.view.kind === "files") {
+      var state = window.filesStatus.state
+      if (state === "starting" || state === "scanning") return "Indexing…"
+      if (state === "disabled") return "File search is off"
+      if (state === "error") return "File search unavailable"
+      return window.query ? "No files found" : "Type to search files"
+    }
+    return window.backend.ready ? "No results" : "Loading…"
+  }
 
   readonly property int cardWidth: Math.min(px(750), width - Style.gapsOut * 2)
   readonly property int fullHeight: Math.min(px(475), height - Style.gapsOut * 2)
@@ -75,7 +96,7 @@ OverlayWindow {
     if (typeof payload.query === "string") window.query = payload.query
     window.actionPanelOpen = false
     window.historyIndex = -1
-    window.rebuild(true)
+    window.applyQuery(window.query)
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
@@ -95,8 +116,7 @@ OverlayWindow {
 
   function popToRoot() {
     window.stack = [{ kind: "root", title: "oma-cast", query: "" }]
-    window.query = ""
-    window.rebuild(true)
+    window.applyQuery("")
   }
 
   // ---------------------------------------------------------- navigation
@@ -105,8 +125,7 @@ OverlayWindow {
     var saved = window.stack.slice()
     saved[saved.length - 1] = Object.assign({}, window.view, { query: window.query, selectedIndex: window.selectedIndex })
     window.stack = saved.concat([next])
-    window.query = next.kind === "alias" ? (next.value || "") : ""
-    window.rebuild(true)
+    window.applyQuery(next.query !== undefined ? next.query : (next.kind === "alias" ? (next.value || "") : ""))
   }
 
   function pop() {
@@ -116,6 +135,7 @@ OverlayWindow {
     window.stack = next
     window.query = top.query || ""
     window.rebuild(false)
+    window.requestFilesForView()
     if (top.selectedIndex >= 0) window.select(top.selectedIndex)
   }
 
@@ -286,11 +306,26 @@ OverlayWindow {
 
   // ----------------------------------------------------------- the query
 
-  function setQuery(next) {
-    if (window.query === next) return
-    window.query = next
+  // Every query entry point goes through here so the Files cache is kept in
+  // step with the visible text (prepare, typing, history, push, pop).
+  function applyQuery(next) {
+    window.query = String(next || "")
     window.historyIndex = -1
     window.rebuild(true)
+    window.requestFilesForView()
+  }
+
+  // Only the root and files views care about files; other views clear the
+  // cache so a later query cannot leak stale rows into them.
+  function requestFilesForView() {
+    var wants = window.view.kind === "files"
+      || (window.view.kind === "root" && window.backend.filesSettings.includeInRootSearch)
+    window.backend.filesRequest(wants ? window.query : "")
+  }
+
+  function setQuery(next) {
+    if (window.query === next) return
+    window.applyQuery(next)
   }
 
   // ↑ on an empty root walks back through queries that launched something.
@@ -300,8 +335,7 @@ OverlayWindow {
     if (history.length === 0) return false
     var next = Math.max(-1, Math.min(history.length - 1, window.historyIndex + direction))
     if (next === window.historyIndex) return true
-    window.query = next < 0 ? "" : history[next]
-    window.rebuild(true)
+    window.applyQuery(next < 0 ? "" : history[next])
     window.historyIndex = next
     return true
   }
@@ -372,7 +406,7 @@ OverlayWindow {
       if (key === Qt.Key_PageUp) { window.move(-8); return true }
       if (key === Qt.Key_PageDown) { window.move(8); return true }
       if (ctrl && shift && key === Qt.Key_F) { window.performIfOffered(["favorite-add", "favorite-remove"]); return true }
-      if (ctrl && shift && key === Qt.Key_C) { window.performIfOffered(["copy-command", "copy-id"]); return true }
+      if (ctrl && shift && key === Qt.Key_C) { window.performIfOffered(["copy-command", "copy-id", "copy-path"]); return true }
       if (alt && shift && key === Qt.Key_D) { window.performIfOffered(["disable"]); return true }
       if (ctrl && key >= Qt.Key_1 && key <= Qt.Key_9) {
         var target = window.nthItem(key - Qt.Key_0)
@@ -397,6 +431,15 @@ OverlayWindow {
   Connections {
     target: window.backend
     function onCandidatesRevisionChanged() { if (window.shown && !window.actionPanelOpen) window.rebuild(false) }
+    function onFilesRevisionChanged() {
+      if (!window.shown || window.actionPanelOpen) return
+      var y = list.contentY
+      window.rebuild(false)
+      list.contentY = y
+    }
+    function onFilesHelperUnavailable() {
+      window.showToast("failure", "File search helper missing — run: oma-cast files build")
+    }
   }
 
   // ================================================================== UI
@@ -569,16 +612,15 @@ OverlayWindow {
         Text {
           anchors.horizontalCenter: parent.horizontalCenter
           textFormat: Text.PlainText
-          text: window.view.kind === "alias" ? "" : ""
+          text: window.view.kind === "files" ? "\uf15b" : (window.view.kind === "alias" ? "" : "")
           color: window.look.accent
-          font.family: window.view.kind === "alias" ? window.look.fontFamily : "omarchy"
+          font.family: window.view.kind === "files" ? window.look.fontFamily : (window.view.kind === "alias" ? window.look.fontFamily : "omarchy")
           font.pixelSize: window.px(28)
         }
         Text {
           anchors.horizontalCenter: parent.horizontalCenter
           textFormat: Text.PlainText
-          text: window.view.kind === "alias" ? window.view.title
-            : (window.backend.ready ? "No results" : "Loading…")
+          text: window.emptyTitle()
           color: window.look.foreground
           font.family: window.look.fontFamily
           font.pixelSize: Math.round(Style.font.title * window.zoom)

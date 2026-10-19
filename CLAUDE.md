@@ -53,11 +53,12 @@ plugin/                  # the Omarchy shell plugin (what gets linked into ~/.co
   Launcher.qml           #   entry point: open()/close() from the shell, ShellIpc "oma-cast", GlobalShortcut oma-cast:toggle
   Backend.qml            #   in-process backend: paths, config.json, stores, method registry, notifications
   ui/                    #   launcher surface and (later) views
-  services/              #   QML services that do I/O (JsonStore, OmarchyMenuSource; later clipboard, …)
+  services/              #   QML services that do I/O (JsonStore, OmarchyMenuSource, Files; later clipboard, …)
   core/*.js              #   pure logic, no Qt imports: shared by QML and node tests (module.exports guard)
-                         #   Ranker, Frecency (ref 02 §4, port exactly), OmarchyMenu, RootSearch, Schema, Migrate, Rpc, Paths, Log
+                         #   Ranker, Frecency (ref 02 §4, port exactly), OmarchyMenu, RootSearch, Files, Schema, Migrate, Rpc, Paths, Log
+helper/                  #   oma-cast-files: Rust sidecar around fff-search 0.11.0 (file-name search, frecency)
 bin/oma-cast             # bash CLI
-tests/*.test.js          # node --test unit tests for plugin/core (ranker, frecency, Omarchy menu, root search, …)
+tests/*.test.js          # node --test unit tests for plugin/core (ranker, frecency, Omarchy menu, root search, files, …)
 tests/smoke.sh           # live acceptance check against the running shell
 ```
 
@@ -67,6 +68,7 @@ Rules for `plugin/core/*.js`: one self-contained file per module (QML `import "x
 
 ```sh
 node --test tests/           # unit tests (node's built-in runner; no npm install)
+cargo test --manifest-path helper/Cargo.toml   # file-search sidecar tests
 tests/smoke.sh               # live checks: doctor, IPC, toggle latency (<100 ms). Shows/hides the launcher, never types.
 omarchy plugin validate plugin
 
@@ -78,6 +80,8 @@ bin/oma-cast uninstall
 oma-cast toggle | show | hide
 oma-cast run <commandId>             # Phase 1+
 oma-cast call <method> [json]        # any backend method, e.g. oma-cast call system.info
+oma-cast files status|enable|disable|root|reindex|reset-ranking|retry
+oma-cast files build                 # local cargo build of the sidecar (no shell needed)
 oma-cast doctor
 oma-cast setup hyprland              # writes ~/.config/hypr/oma-cast.lua (Alt+Space) and requires it from hyprland.lua
 
@@ -121,10 +125,12 @@ Works:
   - Compact mode shows only the header until you type.
   - A launch from root clears the query [I].
   - A row is selected on hover only after a real pointer move (Omarchy's PointerMoveGate).
+- **File search (Phase 7 partial):** a Rust sidecar (`helper/`, `fff-search = 0.11.0`) indexes file names under `~` and answers a Files section in root plus a "Search Files" view. Query history is deliberately not stored; only FFF's access frecency LMDB is. Three rows max in root, a filename-confidence gate, hidden/secret filtering, `.ignore` support, and `Show All Files`. New installs default on and `install` builds the helper; existing installs opt in. `oma-cast files …` controls it.
 - **Latency:** show → mapped in 37–44 ms, hide in 9–25 ms (`tests/smoke.sh`).
-- **Tests:** 65 unit tests (`node --test tests/`).
+- **Tests:** 83 node unit tests + 8 helper tests (`node --test tests/`, `cargo test --manifest-path helper/Cargo.toml`).
 
 Stubbed / not yet:
+- File search previews/Quick Look and content search; hidden dotfiles at a non-git root; multi-root/scopes; a per-file "forget" action.
 - Keystroke buffering before the surface maps. Keys sent within ~40 ms of the hotkey go to the window underneath.
 - Vim navigation bindings, Ctrl+P dropdown, Ctrl+T, Ctrl+Shift+K, inline argument pills, alerts.
 - No settings window, so you can't re-enable a disabled command except by editing `~/.local/share/oma-cast/db/settings.json` (delete its `enabled: false`). That's Phase 2.
@@ -132,6 +138,7 @@ Stubbed / not yet:
 
 Deviations from the original spec (SPEC §2.0 and the Phase 1 note in §12):
 - A Quickshell plugin instead of Tauri + Node; there's no NDJSON supervisor until Phase 5.
+- File search uses an out-of-process `fff-search` sidecar instead of the custom Rust/SQLite indexer in SPEC §8.6/Phase 7. It is a new build/runtime dependency, default-on only for new installs; existing installs opt in. Recorded in SPEC.
 - JSON documents instead of SQLite; no DB encryption or libsecret key.
 - Logs go to the shell log; `config.json` instead of `config.toml`; no D-Bus name.
 - The Omarchy theme replaces Raycast's 8 themes; the HUD is Omarchy's OSD.
