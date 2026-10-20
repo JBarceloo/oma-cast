@@ -4,6 +4,7 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
+import "../core/Agent.js" as Agent
 
 // Launcher surface (SPEC §5.1, §10.2): 750×475 at uiZoom 1, 66 px search
 // header, 42 px footer, centred horizontally about a quarter down the
@@ -257,6 +258,11 @@ OverlayWindow {
     window.actionPanelOpen = window.actions.length > 0
   }
 
+  function askAgent() {
+    var r = window.backend.callSync("rootSearch.performAction", { id: Agent.FALLBACK_ID, action: "open", query: window.query })
+    if (!r.ok) window.showToast("failure", r.error)
+  }
+
   function saveAlias() {
     var r = window.backend.callSync("settings.updateCommandSettings", { commandId: window.view.commandId, alias: window.query })
     if (!r.ok) { window.showToast("failure", r.error); return }
@@ -353,6 +359,8 @@ OverlayWindow {
       if (enter) { window.saveAlias(); return true }
       if (key === Qt.Key_Space) return true
     } else {
+      // Only root search offers this hand-off; never submit alias/menu text.
+      if (window.atRoot && enter && ctrl && alt && !shift) { window.askAgent(); return true }
       if (ctrl && key === Qt.Key_K) { window.toggleActionPanel(); return true }
       if (enter && ctrl && shift) { window.performNth(2); return true }
       if (enter && ctrl) { window.performNth(1); return true }
@@ -397,6 +405,9 @@ OverlayWindow {
   Connections {
     target: window.backend
     function onCandidatesRevisionChanged() { if (window.shown && !window.actionPanelOpen) window.rebuild(false) }
+    function onNotification(method, data) {
+      if (method === "agent.launchFailed" && window.shown) window.showToast("failure", data.message)
+    }
   }
 
   // ================================================================== UI

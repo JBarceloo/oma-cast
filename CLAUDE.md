@@ -22,7 +22,7 @@ Spec legend: **[O]** observed in Raycast, **[I]** inferred, **[D]** design decis
 1. **Clean room.** Never copy, bundle or redistribute anything from `Raycast.app` (JS, icons, fonts, `.node` modules). Allowed: the public npm `@raycast/api` / `@raycast/utils` packages (check the license of the pinned version) and the MIT `raycast/extensions` repo.
 2. **Never call `*.raycast.com`.** No store, account, sync, telemetry or currency APIs. Build extensions from a local `raycast/extensions` clone.
 3. **No telemetry.** No Sentry, no PostHog.
-4. **No AI features.** Where a built-in mixes AI and non-AI behaviour, build the non-AI path and leave a `// AI: not implemented` comment.
+4. **No embedded AI features.** The fork's user-authorized exception is an explicit hand-off of root-search text to Omarchy's existing default-agent terminal launcher (SPEC §2.0). No model API, credential handling or automatic submission while typing. Other built-ins remain non-AI.
 5. **Port the root-search ranker exactly** from `reference/02-backend.md §4.2–4.5`. Do not substitute fzf, nucleo or fuse.js.
 
 ## How to work
@@ -66,7 +66,7 @@ Rules for `plugin/core/*.js`: one self-contained file per module (QML `import "x
 ## Commands
 
 ```sh
-node --test tests/           # unit tests (node's built-in runner; no npm install)
+node --test tests/*.test.js   # unit tests (node's built-in runner; no npm install)
 tests/smoke.sh               # live checks: doctor, IPC, toggle latency (<100 ms). Shows/hides the launcher, never types.
 omarchy plugin validate plugin
 
@@ -122,7 +122,9 @@ Works:
   - A launch from root clears the query [I].
   - A row is selected on hover only after a real pointer move (Omarchy's PointerMoveGate).
 - **Latency:** show → mapped in 37–44 ms, hide in 9–25 ms (`tests/smoke.sh`).
-- **Tests:** 65 unit tests (`node --test tests/`).
+- **Tests:** baseline 65 unit tests; agent hand-off coverage added (`node --test tests/*.test.js`).
+
+**Default-agent hand-off (fork, 2026-10-20):** user-authorized addition outside the original phase plan. The root fallback "Ask default agent" and Ctrl+Alt+Enter pass the query to `omarchy-agent --prompt` as a literal argv element. `AgentLauncher.qml` checks the configured agent/terminal with a bounded, question-free preflight, prevents overlapping submissions and cancels on hide/unload. `Launcher.qml` dismisses the overlay before launching through `Util.execArgv`. Errors leave the query visible. There are no new dependencies, model APIs, credentials or question-history writes. Existing CLI approval behaviour is inherited. Portable checks do not establish live terminal focus, authentication, or provider compatibility; verify those on Omarchy.
 
 Stubbed / not yet:
 - Keystroke buffering before the surface maps. Keys sent within ~40 ms of the hotkey go to the window underneath.

@@ -10,6 +10,7 @@ import "core/Ranker.js" as Ranker
 import "core/Frecency.js" as Frecency
 import "core/OmarchyMenu.js" as OmarchyMenu
 import "core/RootSearch.js" as RootSearch
+import "core/Agent.js" as Agent
 import "services"
 
 // The clone's backend, in-process (SPEC §2.0). It owns the paths, the host
@@ -39,7 +40,7 @@ Item {
   property var candidates: []
   property var candidatesById: ({})
   property int candidatesRevision: 0
-  readonly property bool loading: menuSource.loading
+  readonly property bool loading: menuSource.loading || agentLauncher.checking
 
   signal notification(string method, var data)
 
@@ -330,6 +331,10 @@ Item {
         // Fallbacks are rows, not stored candidates.
         var fallback = RootSearch.FALLBACKS.filter(function(f) { return f.id === (data && data.id) })[0]
         if (fallback) {
+          if (fallback.id === Agent.FALLBACK_ID) {
+            agentLauncher.start(data.query)
+            return { pending: true }
+          }
           Util.execArgv(["omarchy-launch-browser", RootSearch.fallbackUrl(fallback, data.query)])
           return { close: true }
         }
@@ -370,6 +375,13 @@ Item {
   Component.onDestruction: { settingsStore.flush(); frecencyStore.flush() }
   onNotification: function(method, data) {
     if (method === "window.visibilityChanged" && data && data.visible) menuSource.refresh()
+    if (method === "window.visibilityChanged" && data && !data.visible) agentLauncher.cancel()
+  }
+
+  AgentLauncher {
+    id: agentLauncher
+    onPrepared: function(argv) { backend.emit("agent.launchReady", { argv: argv }) }
+    onFailed: function(message) { backend.emit("agent.launchFailed", { message: message }) }
   }
 
   // ------------------------------------------------------------ persistence

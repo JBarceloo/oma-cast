@@ -8,7 +8,8 @@ var SUGGESTIONS_LIMIT = 6            // [I] SPEC §7.2 "N≈6"
 // Fallback commands, in default fallback order [O names, D URLs].
 var FALLBACKS = [
   { id: "fallback:google", title: "Search Google", icon: "", url: "https://www.google.com/search?q={query}" },
-  { id: "fallback:duckduckgo", title: "Search DuckDuckGo", icon: "", url: "https://duckduckgo.com/?q={query}" }
+  { id: "fallback:duckduckgo", title: "Search DuckDuckGo", icon: "", url: "https://duckduckgo.com/?q={query}" },
+  { id: "fallback:agent", title: "Ask default agent", icon: "󰚩", subtitle: "New terminal session · Ctrl+Alt+Enter" }
 ]
 
 // Built-in commands of our own (the declarative catalog; grows per phase).
@@ -142,7 +143,7 @@ function fallbackRows(query) {
   return FALLBACKS.map(function(f) {
     return {
       candidate: {
-        id: f.id, type: "command", kind: "fallback", title: f.title, subtitle: query,
+        id: f.id, type: "command", kind: "fallback", title: f.title, subtitle: f.subtitle || query,
         typeLabel: "Fallback", glyph: f.icon, url: f.url, rootSearch: { when: "searching" }
       },
       record: null
