@@ -2,8 +2,6 @@ import QtQuick
 import Quickshell.Io
 import "../core/Agent.js" as Agent
 
-// Preflight only: the entry point dismisses the overlay before launching.
-// A dismissed/reloaded plugin never submits a pending question later.
 Item {
   id: service
   property bool checking: false

@@ -1,12 +1,10 @@
 import QtQuick
 import qs.Commons
 
-// Ctrl+K action panel (SPEC §10.2): popover anchored bottom-right, its own
-// search field, rows grouped by section, each with its shortcut.
 Rectangle {
   id: panel
 
-  property var actions: []          // [{id, title, shortcut, section, icon}]
+  property var actions: []
   property string filter: ""
   property int selectedIndex: 0
   property var look: null

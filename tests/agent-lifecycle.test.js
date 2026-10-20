@@ -1,5 +1,3 @@
-// Portable checks of the actual QML JavaScript handlers. These fixtures do not
-// validate Qt imports, Process signal timing or real terminal focus.
 const test = require("node:test")
 const assert = require("node:assert/strict")
 const fs = require("node:fs")

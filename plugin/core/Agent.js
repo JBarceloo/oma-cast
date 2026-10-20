@@ -1,5 +1,3 @@
-// Explicit hand-off to Omarchy's existing agent launcher. No model calls or
-// credentials live here. Keep question text out of shell source and options.
 var FALLBACK_ID = "fallback:agent"
 
 function launchArgv(query) {
@@ -10,8 +8,6 @@ function launchArgv(query) {
   return ["omarchy-agent", "--prompt", prompt]
 }
 
-// Fixed script, no question interpolation. Like Util.execArgv, the QML
-// service runs it in a login shell so it sees the desktop's CLI PATH.
 var CHECK_SCRIPT = [
   'for tool in omarchy-agent omarchy-agent-prompt omarchy-default-agent omarchy-launch-tui xdg-terminal-exec uwsm-app; do',
   '  command -v "$tool" >/dev/null 2>&1 || { printf "Agent launch unavailable: missing %s. Update Omarchy.\\n" "$tool"; exit 1; }',

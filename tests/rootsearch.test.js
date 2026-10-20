@@ -72,7 +72,6 @@ test("an exact alias puts its command on top (Phase 1 accept)", () => {
 })
 
 test("launching bumps frecency and teaches the query (Phase 1 accept)", () => {
-  // Chromium and Signal tie for "i" on title score alone; a launch decides it.
   const before = titles(results("web")[0])
   assert.deepEqual(before.slice(0, 2), ["Chromium", "Firefox"])
   const visit = Frecency.recordVisit(null, NOW - 1000, "web")

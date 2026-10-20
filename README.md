@@ -57,7 +57,7 @@ oma-cast setup hyprland       # bind Alt+Space
 oma-cast doctor               # check everything is wired up
 ```
 
-Press **Alt+Space**. Super+Space stays the Omarchy menu. If you'd rather have oma-cast there, the swap is in `~/.config/hypr/oma-cast.lua`, commented out.
+Press **Alt+Space**. Super+Space stays the Omarchy menu. You can change the launcher binding in `~/.config/hypr/oma-cast.lua`.
 
 To remove it: `oma-cast uninstall`.
 

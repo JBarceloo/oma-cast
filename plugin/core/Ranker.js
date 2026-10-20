@@ -1,21 +1,3 @@
-// Root-search ranking, ported from Raycast (reference/02-backend.md §4.2–4.5,
-// SPEC §7.3). Keep this literal: generic fuzzy finders rank differently.
-//
-// Candidate shape:
-//   {
-//     id, type,                 // type: application | command | quicklink | menu-bar | preference | file | calendar-event | contact
-//     title, subtitle?,
-//     alternateTitles?: [string], keywords?: [string],
-//     alias?,                   // user alias, matched exact/prefix
-//     bundleId?,                // app id; a keyword only when the query contains "."
-//     frecency?,                // score from Frecency.score(), default 1
-//     openedAt?,                // ms of last launch
-//     searchTerms?: [{term, at}] | [string],   // queries that launched it
-//     pinPriority?,             // number: pinned candidate, lower first
-//     alwaysMatching?,          // listed even when the text does not match
-//     sortHeuristic?, extensionTitle?,
-//     boostedTerms?: [string]   // queries for which it is a boosted search term (Raycast dXi)
-//   }
 
 var SEPARATORS = "\t\n -./()[]"
 var MAX = Number.MAX_SAFE_INTEGER
@@ -36,10 +18,7 @@ function isSeparator(ch) {
   return ch !== "" && SEPARATORS.indexOf(ch) !== -1
 }
 
-// ---------------------------------------------------------- normalisation
 
-// {normalizedText, wordBoundaries}: boundaries[n] is true when char n-1 is
-// [a-z0-9] and char n is [A-Z] (camelCase), from the original casing.
 function normalize(s) {
   var text = String(s === undefined || s === null ? "" : s)
   var boundaries = []
@@ -55,8 +34,6 @@ var TRANSLIT = {
   "ı": "i", "ħ": "h", "Ħ": "H"
 }
 
-// ASCII transliteration. Keeps the string length stable for single-char
-// diacritic folds; the multi-char map entries may lengthen it.
 function transliterate(s) {
   var text = String(s === undefined || s === null ? "" : s)
   if (typeof text.normalize === "function") text = text.normalize("NFD").replace(/[̀-ͯ]/g, "")
@@ -68,9 +45,7 @@ function transliterate(s) {
   return out
 }
 
-// ------------------------------------------------------------ fuzzy match
 
-// af(target, query, {literalQueryDots}) → "exact" | "unmatched" | {score, skipped}.
 function fuzzyMatch(target, query, options) {
   var literalDots = !!(options && options.literalQueryDots)
   var tn = normalize(target)
@@ -83,7 +58,7 @@ function fuzzyMatch(target, query, options) {
     return isSeparator(ch)
   }
 
-  if (q.length === 0) return "unmatched"  // [I] callers handle the empty query before matching
+  if (q.length === 0) return "unmatched"
   if (t === q) return "exact"
 
   var sepCount = 0
@@ -91,14 +66,11 @@ function fuzzyMatch(target, query, options) {
   var u = q.length - sepCount
   if (u > t.length) return "unmatched"
 
-  // Subsequence precheck.
   if (u > 2) {
     var ti = 0
     for (var qi = 0; qi < q.length; qi++) {
       var qc = q.charAt(qi)
       if (querySep(qc)) {
-        // [I] "skips one separator in the target if one is present": advance
-        // past the next target separator when there is one, else ignore.
         for (var s = ti; s < t.length; s++) {
           if (isSeparator(t.charAt(s))) { ti = s + 1; break }
         }
@@ -132,7 +104,7 @@ function fuzzyMatch(target, query, options) {
 
       var cellScore
       if (sepMatch) cellScore = 1
-      else if (p === 0 && e === 0) cellScore = 4 // [I] "first row" = first row that matches (p == 0)
+      else if (p === 0 && e === 0) cellScore = 4
       else {
         var wordStart = bounds[e] || (e > 0 && isSeparator(t.charAt(e - 1)))
         cellScore = (wordStart && !isSeparator(tc)) ? 3 : 2
@@ -158,8 +130,6 @@ function fuzzyMatch(target, query, options) {
       p++
       prev = cur
     } else if (chSep) {
-      // [I] An unmatched separator row is dropped; for the last row the
-      // previous row's best still stands, so a trailing space does not unmatch.
       skipped++
     } else {
       return "unmatched"
@@ -173,14 +143,12 @@ function fuzzyMatch(target, query, options) {
   return { score: best, skipped: skipped }
 }
 
-// of(): exact → +MAX, unmatched/absent → -MAX, else the score.
 function matchScore(match) {
   if (match === "exact") return MAX
   if (!match || match === "unmatched") return -MAX
   return match.score
 }
 
-// rf(match, queryLen, sensitivity), default medium [O backend default].
 function passesThreshold(match, queryLength, sensitivity) {
   if (match === "exact") return true
   if (!match || match === "unmatched") return false
@@ -191,7 +159,6 @@ function passesThreshold(match, queryLength, sensitivity) {
   return match.score >= 1.5 * (len - 2) + 4
 }
 
-// J7e(alias, query)
 function aliasMatch(alias, query) {
   var a = String(alias || "").toLowerCase()
   var q = String(query || "").toLowerCase()
@@ -201,8 +168,6 @@ function aliasMatch(alias, query) {
   return "unmatched"
 }
 
-// Y7e: learned search terms. Count only for items with frecency > 1 opened
-// within 17 days. Best kept: exact > prefix > overbounds (larger count).
 function searchTermMatch(terms, query, frecency, openedAtMs, nowMs) {
   var none = { kind: "none", count: 0 }
   if (!Array.isArray(terms) || terms.length === 0) return none
@@ -229,7 +194,6 @@ function searchTermMatch(terms, query, frecency, openedAtMs, nowMs) {
   return best
 }
 
-// exact 3 > prefix 2 > overbounds 1 (larger count better) > none 0.
 function searchTermClass(m) {
   if (!m) return 0
   if (m.kind === "exact") return 3
@@ -242,8 +206,6 @@ function searchTermRank(m) {
   return searchTermClass(m) * 10 + (m && m.kind === "overbounds" ? m.count : 0)
 }
 
-// q7e: does `q` occur in `title` as a whole word (start/end, separator or
-// camelCase boundary on both sides)?
 function wholeWordIn(title, q) {
   var tn = normalize(title)
   var t = tn.normalizedText
@@ -260,21 +222,18 @@ function wholeWordIn(title, q) {
   }
 }
 
-// ---------------------------------------------------------- per candidate
 
-// iXi: the ranking record for one candidate against a query.
 function buildRecord(candidate, query, options) {
   var opts = options || {}
   var sensitivity = opts.sensitivity || "medium"
   var nowMs = typeof opts.nowMs === "number" ? opts.nowMs : Date.now()
   var literalDots = !!opts.literalQueryDots
   var c = candidate || {}
-  var q = String(query || "").trim().toLowerCase() // [I] surrounding whitespace is not part of the query
+  var q = String(query || "").trim().toLowerCase()
   var tq = transliterate(q)
   var frecency = typeof c.frecency === "number" && isFinite(c.frecency) ? c.frecency : 1
 
   var title = transliterate(String(c.title || ""))
-  // JYi: a query starting with "/" matches the title's first "/" as a space.
   if (tq.charAt(0) === "/") title = title.replace("/", " ")
   var titleLower = title.toLowerCase()
   var alternates = Array.isArray(c.alternateTitles) ? c.alternateTitles.map(function(a) { return String(a || "") }) : []
@@ -289,7 +248,7 @@ function buildRecord(candidate, query, options) {
     alias: aliasMatch(c.alias, q),
     isBoostedSearchTerm: false,
     title: "unmatched",
-    titleMatch: "none",           // exact | prefix | none
+    titleMatch: "none",
     titleScore: -MAX,
     alternates: [],
     subtitle: null,
@@ -331,7 +290,6 @@ function buildRecord(candidate, query, options) {
 
   record.searchTerm = searchTermMatch(c.searchTerms, q, frecency, c.openedAt, nowMs)
 
-  // Title boost ($Yi/eXi): queries of 3+ chars without whitespace.
   if (q.length >= 3 && !/\s/.test(q)) {
     if (record.title !== "exact" && wholeWordIn(title, tq)) {
       var floor = 4 + (q.length - 1) * 2 + 0.5
@@ -341,7 +299,6 @@ function buildRecord(candidate, query, options) {
     if (exactAlternate) {
       record.titleMatch = "exact"
     } else {
-      // [I] Literal reading: the alternate-title max is part of the boost step.
       for (var i = 0; i < record.alternates.length; i++) {
         var s = matchScore(record.alternates[i])
         if (s > record.titleScore) record.titleScore = s
@@ -359,7 +316,6 @@ function buildRecord(candidate, query, options) {
   return record
 }
 
-// ------------------------------------------------------------- ordering
 
 function collate(a, b) {
   return String(a || "").localeCompare(String(b || ""), undefined, { numeric: true, sensitivity: "base" })
@@ -367,10 +323,9 @@ function collate(a, b) {
 
 function heuristic(record) {
   var h = record.candidate.sortHeuristic
-  return typeof h === "number" && isFinite(h) ? h : 0 // [I] missing heuristic sorts as 0
+  return typeof h === "number" && isFinite(h) ? h : 0
 }
 
-// B4: plain tiebreak.
 function comparePlain(a, b) {
   if (a.frecency !== b.frecency) return b.frecency - a.frecency
   if (a.hasAlias !== b.hasAlias) return a.hasAlias ? -1 : 1
@@ -393,29 +348,23 @@ function overboundsCount(r) {
   return r.searchTerm.kind === "overbounds" ? r.searchTerm.count : 0
 }
 
-// sXi: main comparator for text-matched candidates. ctx = {hasExactTitle,
-// hasExactSearchTerm} over the bucket being sorted.
 function compareMatched(a, b, ctx) {
   var context = ctx || {}
   var aExactAlias = a.alias === "exact", bExactAlias = b.alias === "exact"
-  // 1. exact alias
   if (aExactAlias !== bExactAlias) return aExactAlias ? -1 : 1
 
   var aTermExact = a.searchTerm.kind === "exact", bTermExact = b.searchTerm.kind === "exact"
-  // 2. exact title somewhere and exact search term somewhere
   if (context.hasExactTitle && context.hasExactSearchTerm) {
     if (aTermExact !== bTermExact) return aTermExact ? -1 : 1
     if (aTermExact && bTermExact && a.frecency !== b.frecency) return b.frecency - a.frecency
   }
 
-  // 3. boosted search term, unless the other is more frecent (> 1)
   if (a.isBoostedSearchTerm !== b.isBoostedSearchTerm) {
     var boosted = a.isBoostedSearchTerm ? a : b
     var other = a.isBoostedSearchTerm ? b : a
     if (!(other.frecency > 1 && other.frecency > boosted.frecency)) return a.isBoostedSearchTerm ? -1 : 1
   }
 
-  // 4. contacts lose unless more frecent or more strongly matched
   var aContact = a.typePriority === 0 && a.type === "contact"
   var bContact = b.typePriority === 0 && b.type === "contact"
   if (aContact !== bContact) {
@@ -426,7 +375,6 @@ function compareMatched(a, b, ctx) {
     if (!contactWins) return aContact ? 1 : -1
   }
 
-  // 5. exact titles
   if (context.hasExactTitle) {
     var aExactTitle = a.titleMatch === "exact", bExactTitle = b.titleMatch === "exact"
     if (aExactTitle && bExactTitle) {
@@ -438,14 +386,12 @@ function compareMatched(a, b, ctx) {
     if (aExactTitle !== bExactTitle) return aExactTitle ? -1 : 1
   }
 
-  // 6. exact search term
   if (aTermExact !== bTermExact) return aTermExact ? -1 : 1
   if (aTermExact && bTermExact) {
     if (a.frecency !== b.frecency) return b.frecency - a.frecency
     return comparePlain(a, b)
   }
 
-  // 7. exact subtitle
   if (a.subtitleExact !== b.subtitleExact) return a.subtitleExact ? -1 : 1
   if (a.subtitleExact && b.subtitleExact) {
     if (a.frecency !== b.frecency) return b.frecency - a.frecency
@@ -453,35 +399,26 @@ function compareMatched(a, b, ctx) {
     return comparePlain(a, b)
   }
 
-  // 8. alias prefix, then search-term prefix
   var aAliasPrefix = a.alias === "prefix", bAliasPrefix = b.alias === "prefix"
   if (aAliasPrefix !== bAliasPrefix) return aAliasPrefix ? -1 : 1
   var aTermPrefix = a.searchTerm.kind === "prefix", bTermPrefix = b.searchTerm.kind === "prefix"
   if (aTermPrefix !== bTermPrefix) return aTermPrefix ? -1 : 1
-  // [I] "if both prefix": either both alias-prefix or both term-prefix.
   if ((aAliasPrefix && bAliasPrefix) || (aTermPrefix && bTermPrefix)) {
     if (a.frecency !== b.frecency) return b.frecency - a.frecency
   }
 
-  // 9. overbounds: a count of 3+ on either side decides
   var ao = overboundsCount(a), bo = overboundsCount(b)
   if ((ao >= 3 || bo >= 3) && ao !== bo) return bo - ao
 
-  // 10. best of title and subtitle score
   var aBest = Math.max(a.titleScore, a.subtitleScore)
   var bBest = Math.max(b.titleScore, b.subtitleScore)
   if (aBest !== bBest) return bBest - aBest
 
-  // 11. frecency
   if (a.frecency !== b.frecency) return b.frecency - a.frecency
-  // 12. title score
   if (a.titleScore !== b.titleScore) return b.titleScore - a.titleScore
-  // 13. type priority
   if (a.typePriority !== b.typePriority) return b.typePriority - a.typePriority
-  // 14. sort heuristic
   var h = heuristic(a) - heuristic(b)
   if (h !== 0) return h
-  // 15. title collator
   return collate(a.candidate.title, b.candidate.title)
 }
 
@@ -489,7 +426,6 @@ function sign(x) {
   return x < 0 ? -1 : (x > 0 ? 1 : 0)
 }
 
-// Stable sort (index tiebreak), independent of the engine's sort.
 function stableSort(records, compare) {
   var indexed = records.map(function(r, i) { return { r: r, i: i } })
   indexed.sort(function(x, y) {
@@ -518,7 +454,6 @@ function byPinThen(then) {
   }
 }
 
-// cXi: ordered [{candidate, record}] for a section's candidates.
 function rank(candidates, query, options) {
   var list = Array.isArray(candidates) ? candidates : []
   var q = String(query || "").trim()

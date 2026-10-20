@@ -19,7 +19,7 @@ function fixture(t) {
 
 test("preflight accepts configured agents and terminal providers without starting a session", t => {
   const f = fixture(t)
-  f.script("omarchy-agent", "exit 99\n") // preflight must never invoke it
+  f.script("omarchy-agent", "exit 99\n")
   for (const terminal of ["foot.desktop", "com.mitchellh.ghostty.desktop", "kitty.desktop", "Alacritty.desktop"]) {
     const r = f.check({ TEST_TERMINAL: terminal })
     assert.equal(r.status, 0, r.stdout + r.stderr)
@@ -48,8 +48,6 @@ test("questions remain one literal argument, including CLI flags and shell metac
   const marker = path.join(f.dir, "must-not-exist")
   for (const prompt of ["--inline", "--pick", "--prompt", "  Why?  ", 'Quotes: "hello" and \'hi\'', "line one\nline two 🚀", `$(touch ${marker}); \`touch ${marker}\`; >${marker}`]) {
     const argv = Agent.launchArgv(prompt)
-    // Exercise the same login-shell argument forwarding body as Util.execArgv,
-    // with a fixture PATH (no login profile) instead of the real desktop PATH.
     const r = spawnSync("/bin/bash", ["-c", 'exec "$@"', "bash", ...argv], { env: f.env, encoding: "utf8" })
     assert.equal(r.status, 0, r.stderr)
     assert.equal(r.stdout, prompt)
