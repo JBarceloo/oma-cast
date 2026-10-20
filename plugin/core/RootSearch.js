@@ -20,6 +20,15 @@ var BUILTINS = [
     keywords: ["menu", "omarchy"],
     run: { summon: "omarchy.menu", payload: "{\"menu\":\"root\"}" },
     rootSearch: { when: "always" }
+  },
+  {
+    id: "builtin:search-files",
+    title: "Search Files",
+    subtitle: "Find files by name",
+    keywords: ["file", "files", "find", "search"],
+    iconName: "text-x-generic",
+    run: { view: { kind: "files", title: "Search Files" } },
+    rootSearch: { when: "always" }
   }
 ]
 
@@ -85,8 +94,9 @@ function builtinCandidate(def) {
     subtitle: def.subtitle || "",
     keywords: def.keywords || [],
     typeLabel: "Command",
-    glyph: "",
-    glyphFont: "omarchy",
+    glyph: def.iconName ? "" : (def.glyph || ""),
+    glyphFont: def.iconName ? "" : (def.glyph ? "" : "omarchy"),
+    iconName: def.iconName || "",
     run: def.run,
     rootSearch: def.rootSearch || { when: "always" }
   }
@@ -153,6 +163,27 @@ function fallbackRows(query) {
 // Sections for the root view (SPEC §7.2):
 //   empty query: Favorites, Suggestions, Commands, Applications
 //   query:       Results, Use "<q>" with…
+// A root Files row is only shown when the query plausibly names the file:
+// path-like queries pass; otherwise the query's characters must appear in
+// order in the file name. This suppresses FFF's very permissive typo matches
+// in the small root section (the files view still shows them).
+function confidentFileMatch(candidate, query) {
+  var q = String(query || "").toLowerCase()
+  if (!q) return false
+  if (q.indexOf("/") >= 0 || q.indexOf(".") >= 0 || q.indexOf("~") >= 0) return true
+  var relative = String((candidate && (candidate.relativePath || candidate.path)) || "").toLowerCase()
+  if (relative.indexOf(q) >= 0) return true
+  var name = String((candidate && (candidate.fileName || candidate.title)) || "").toLowerCase()
+  if (!name) return false
+  var at = 0
+  for (var i = 0; i < q.length; i++) {
+    at = name.indexOf(q.charAt(i), at)
+    if (at < 0) return false
+    at++
+  }
+  return true
+}
+
 function rootSections(candidates, query, ctx, deps) {
   var q = String(query || "").trim()
   var decorated = []
@@ -167,6 +198,18 @@ function rootSections(candidates, query, ctx, deps) {
     var results = deps.Ranker.rank(searchable, q, opts)
     var sections = []
     if (results.length > 0) sections.push({ id: "results", title: "Results", rows: results })
+
+    var fileRows = (ctx.fileRows || []).filter(function(c) { return c && c.kind && (c.kind === "file" || c.kind === "files-more") })
+    var showFiles = !!ctx.includeFiles && q.length >= 3 && fileRows.length > 0
+    if (showFiles && results.length > 0) {
+      // If the user is clearly looking for an app/command, files are noise.
+      var top = results[0].record
+      if (top && (top.titleMatch === "exact" || top.titleMatch === "prefix")) showFiles = false
+    }
+    if (showFiles && !confidentFileMatch(fileRows[0], q)) showFiles = false
+    if (showFiles)
+      sections.push({ id: "files", title: "Files", rows: fileRows.map(function(c) { return { candidate: c, record: null } }) })
+
     sections.push({ id: "fallback-commands", title: "Use “" + q + "” with…", rows: fallbackRows(q) })
     return sections
   }
@@ -212,9 +255,32 @@ function submenuSections(candidates, menuId, query, ctx, deps) {
   return ranked.length ? [{ id: "results", title: "Results", rows: ranked }] : []
 }
 
+// The pushed "Search Files" view: the cached FFF rows, nothing else.
+function filesSections(rows, query) {
+  var list = (rows || []).filter(function(c) { return c && c.kind === "file" })
+  if (list.length === 0) return []
+  return [{
+    id: "files",
+    title: String(query || "").trim() ? "Files" : "",
+    rows: list.map(function(c) { return { candidate: c, record: null } })
+  }]
+}
+
 // Actions for a row (SPEC §10.2 action panel, §10.3 shortcuts). The first is
 // primary (↵), the second secondary (Ctrl ↵).
 function actionsFor(candidate) {
+  if (candidate.kind === "files-more") {
+    return [{ id: "show-all-files", title: "Show All Files", shortcut: "↵", section: "primary", icon: "\uf054" }]
+  }
+  if (candidate.kind === "file") {
+    var fileList = [{ id: "open", title: "Open File", shortcut: "↵", section: "primary", icon: "\uf15b" }]
+    if (candidate.isText) fileList.push({ id: "open-in-editor", title: "Open in Editor", shortcut: "Ctrl ↵", section: "primary", icon: "\uf044" })
+    fileList.push({ id: "reveal", title: "Reveal in Files", shortcut: "", section: "primary", icon: "\uf07c" })
+    fileList.push({ id: "copy-path", title: "Copy Path", shortcut: "Ctrl Shift C", section: "copy", icon: "\uf0c5" })
+    fileList.push({ id: "copy-name", title: "Copy Name", shortcut: "", section: "copy", icon: "\uf0c5" })
+    return fileList
+  }
+
   var primary
   var list = []
   switch (candidate.kind) {
@@ -283,6 +349,7 @@ if (typeof module !== "undefined") {
     decorate: decorate,
     rootSections: rootSections,
     submenuSections: submenuSections,
+    filesSections: filesSections,
     actionsFor: actionsFor,
     reorderFavorites: reorderFavorites,
     fallbackUrl: fallbackUrl

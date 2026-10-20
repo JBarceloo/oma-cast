@@ -23,6 +23,22 @@ var settingsMigrations = [
       doc.commands = {}                           // commandId -> {enabled, alias, hotkey, favoriteOrder, fallbackOrder, meta}
       return doc
     }
+  },
+  {
+    version: 2,
+    name: "file-search",
+    // New installs (from === 0) get file search on by default; an existing
+    // v1 settings file stays opt-in. An explicit files block is preserved.
+    up: function(doc, ctx) {
+      var fresh = !!ctx && ctx.from === 0
+      doc.files = Object.assign({
+        enabled: fresh,
+        root: "~",
+        includeInRootSearch: true,
+        followSymlinks: false
+      }, doc.files && typeof doc.files === "object" && !Array.isArray(doc.files) ? doc.files : {})
+      return doc
+    }
   }
 ]
 
@@ -65,6 +81,27 @@ var configDefaults = {
   keepVisibleOnFocusLoss: false        // dev aid (keepMainWindowVisibleOnResignKey)
 }
 
+// File-search settings live in settings.json under `files`. New installs get
+// enabled:true from migration 2; the fallback here is off until the store
+// loads, so a missing/broken settings file never starts an index.
+var filesDefaults = {
+  enabled: false,
+  root: "~",
+  includeInRootSearch: true,
+  followSymlinks: false
+}
+
+function withFilesDefaults(value) {
+  var out = {}
+  for (var key in filesDefaults) out[key] = filesDefaults[key]
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    for (var k in value) {
+      if (filesDefaults[k] !== undefined && typeof value[k] === typeof filesDefaults[k]) out[k] = value[k]
+    }
+  }
+  return out
+}
+
 function withConfigDefaults(value) {
   var out = {}
   for (var key in configDefaults) out[key] = configDefaults[key]
@@ -84,6 +121,8 @@ if (typeof module !== "undefined") {
     SEARCH_HISTORY_LIMIT: SEARCH_HISTORY_LIMIT,
     documents: documents,
     configDefaults: configDefaults,
-    withConfigDefaults: withConfigDefaults
+    withConfigDefaults: withConfigDefaults,
+    filesDefaults: filesDefaults,
+    withFilesDefaults: withFilesDefaults
   }
 }
