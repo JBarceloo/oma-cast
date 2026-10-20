@@ -125,6 +125,7 @@ Works:
   - Compact mode shows only the header until you type.
   - A launch from root clears the query [I].
   - A row is selected on hover only after a real pointer move (Omarchy's PointerMoveGate).
+  - Card size is configurable: the `windowWidth`/`windowHeight` general settings (default 750×475 px at uiZoom 1, ranges 500–3000 × 300–2000) set it, for example `oma-cast call settings.updateGeneralSettings '{"windowWidth":1000,"windowHeight":650}'`. Unlike `uiZoom`, they don't scale the text. Settings added after migration v1 are filled in on read by `Schema.withGeneralDefaults`, so they need no migration [D].
 - **File search (Phase 7 partial):** a Rust sidecar (`helper/`, `fff-search = 0.11.0`) indexes file names under `~` and answers a Files section in root plus a "Search Files" view. Query history is deliberately not stored; only FFF's access frecency LMDB is. Three rows max in root, a filename-confidence gate, hidden/secret filtering, `.ignore` support, and `Show All Files`. New installs default on and `install` builds the helper; existing installs opt in. `oma-cast files …` controls it.
 - **Latency:** show → mapped in 37–44 ms, hide in 9–25 ms (`tests/smoke.sh`).
 - **Search cost:** about 11–16 ms per keystroke inside Quickshell's V4 for 438 candidates (was 27–30 ms). `Ranker.normalize`/`transliterate` are memoized per string, which leaves the ranking identical. Measure with `node --jitless tests/bench-rootsearch.js`; V4 runs about 3× slower than that. V4 has no `Intl`, so `collate` keeps `localeCompare` there.
