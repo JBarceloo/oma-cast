@@ -2,7 +2,7 @@
 
 # oma-cast
 
-**A Raycast-style launcher for [Omarchy](https://omarchy.org).**
+**A Raycast-esque launcher for [Omarchy](https://omarchy.org).**
 It learns what you use, searches your apps and every Omarchy action, and looks like it shipped with your theme.
 
 <img src="docs/screenshots/hero.png" alt="oma-cast showing suggestions for apps and Omarchy commands" width="760">
