@@ -67,6 +67,7 @@ Rules for `plugin/core/*.js`: one self-contained file per module (QML `import "x
 
 ```sh
 node --test tests/           # unit tests (node's built-in runner; no npm install)
+mise x act@latest -- act push   # run .github/workflows/ci.yml locally in Docker (.actrc maps the WarpBuild label)
 tests/smoke.sh               # live checks: doctor, IPC, toggle latency (<100 ms). Shows/hides the launcher, never types.
 omarchy plugin validate plugin
 
