@@ -41,6 +41,19 @@ var frecencyMigrations = [
   }
 ]
 
+// Calculator History (SPEC §6.4 calculator_history), capped and pruned by
+// Calculator.pushHistory.
+var calculatorMigrations = [
+  {
+    version: 1,
+    name: "calculator-history",
+    up: function(doc) {
+      doc.history = []          // newest first: {id, query, result, copy, kind, createdAt}
+      return doc
+    }
+  }
+]
+
 var SEARCH_HISTORY_LIMIT = 20   // [I]
 
 function pushSearchHistory(history, query) {
@@ -54,7 +67,8 @@ function pushSearchHistory(history, query) {
 
 var documents = {
   settings: { file: "settings.json", migrations: settingsMigrations },
-  frecency: { file: "frecency.json", migrations: frecencyMigrations }
+  frecency: { file: "frecency.json", migrations: frecencyMigrations },
+  calculator: { file: "calculator.json", migrations: calculatorMigrations }
 }
 
 // Host flags in $XDG_CONFIG_HOME/oma-cast/config.json: user-editable and
@@ -62,7 +76,10 @@ var documents = {
 // missing ones fall back to these defaults.
 var configDefaults = {
   logLevel: "info",                    // trace | debug | info | warning | error | fatal
-  keepVisibleOnFocusLoss: false        // dev aid (keepMainWindowVisibleOnResignKey)
+  keepVisibleOnFocusLoss: false,       // dev aid (keepMainWindowVisibleOnResignKey)
+  // Daily ECB reference rates from frankfurter.dev for currency conversion
+  // (SPEC §8 Calculator). The only network request oma-cast makes. [D]
+  currencyRates: true
 }
 
 function withConfigDefaults(value) {
@@ -80,6 +97,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     settingsMigrations: settingsMigrations,
     frecencyMigrations: frecencyMigrations,
+    calculatorMigrations: calculatorMigrations,
     pushSearchHistory: pushSearchHistory,
     SEARCH_HISTORY_LIMIT: SEARCH_HISTORY_LIMIT,
     documents: documents,

@@ -53,7 +53,9 @@ OverlayWindow {
   readonly property bool atRoot: window.stack.length === 1
   readonly property bool compact: window.general.windowMode === "compact" && window.atRoot && !window.query
   readonly property string placeholder: window.view.kind === "alias" ? "Type an alias, then press ↵"
-    : (window.view.kind === "menu" ? "Search " + window.view.title + "…" : "Search for apps and commands…")
+    : window.view.kind === "menu" ? "Search " + window.view.title + "…"
+    : window.view.kind === "calculator-history" ? "Search calculations…"
+    : "Search for apps and commands…"
 
   readonly property int cardWidth: Math.min(px(750), width - Style.gapsOut * 2)
   readonly property int fullHeight: Math.min(px(475), height - Style.gapsOut * 2)
@@ -139,7 +141,7 @@ OverlayWindow {
       for (var r = 0; r < section.rows.length; r++) {
         var c = section.rows[r]
         if (c.id === keepId) keepIndex = rows.count
-        rows.append(window.rowData(c, "item"))
+        rows.append(window.rowData(c, c.kind === "calculator" ? "calculator" : "item"))
       }
     }
     window.select(keepIndex >= 0 ? keepIndex : window.nextSelectable(-1, 1))
@@ -158,13 +160,22 @@ OverlayWindow {
       alias: String(c.alias || ""),
       checked: !!c.checked,
       disabled: !!c.disabled,
-      favorite: typeof c.favoriteOrder === "number"
+      favorite: typeof c.favoriteOrder === "number",
+      calcInput: String(c.calcInput || ""),
+      calcResult: String(c.calcResult || ""),
+      calcInputCaption: String(c.calcInputCaption || ""),
+      calcResultCaption: String(c.calcResultCaption || "")
     }
+  }
+
+  function isSelectable(index) {
+    var kind = rows.get(index).rowKind
+    return kind === "item" || kind === "calculator"
   }
 
   function nextSelectable(from, direction) {
     for (var i = from + direction; i >= 0 && i < rows.count; i += direction)
-      if (rows.get(i).rowKind === "item") return i
+      if (window.isSelectable(i)) return i
     return -1
   }
 
@@ -202,7 +213,7 @@ OverlayWindow {
   function nthItem(n) {
     var seen = 0
     for (var i = 0; i < rows.count; i++) {
-      if (rows.get(i).rowKind !== "item") continue
+      if (!window.isSelectable(i)) continue
       if (++seen === n) return i
     }
     return -1
@@ -372,7 +383,9 @@ OverlayWindow {
       if (key === Qt.Key_PageUp) { window.move(-8); return true }
       if (key === Qt.Key_PageDown) { window.move(8); return true }
       if (ctrl && shift && key === Qt.Key_F) { window.performIfOffered(["favorite-add", "favorite-remove"]); return true }
-      if (ctrl && shift && key === Qt.Key_C) { window.performIfOffered(["copy-command", "copy-id"]); return true }
+      if (ctrl && shift && key === Qt.Key_C) { window.performIfOffered(["copy-command", "copy-id", "copy-question-answer"]); return true }
+      if (ctrl && shift && key === Qt.Key_D) { window.performIfOffered(["delete-all-entries"]); return true }
+      if (ctrl && key === Qt.Key_D) { window.performIfOffered(["delete-entry"]); return true }
       if (alt && shift && key === Qt.Key_D) { window.performIfOffered(["disable"]); return true }
       if (ctrl && key >= Qt.Key_1 && key <= Qt.Key_9) {
         var target = window.nthItem(key - Qt.Key_0)
@@ -397,6 +410,8 @@ OverlayWindow {
   Connections {
     target: window.backend
     function onCandidatesRevisionChanged() { if (window.shown && !window.actionPanelOpen) window.rebuild(false) }
+    // Exchange rates or zone offsets arrived: re-evaluate a calculation on screen.
+    function onCalculatorRevisionChanged() { if (window.shown && !window.actionPanelOpen && window.query) window.rebuild(false) }
   }
 
   // ================================================================== UI
@@ -578,6 +593,7 @@ OverlayWindow {
           anchors.horizontalCenter: parent.horizontalCenter
           textFormat: Text.PlainText
           text: window.view.kind === "alias" ? window.view.title
+            : window.view.kind === "calculator-history" && !window.query ? "No Calculations Yet"
             : (window.backend.ready ? "No results" : "Loading…")
           color: window.look.foreground
           font.family: window.look.fontFamily
@@ -586,7 +602,8 @@ OverlayWindow {
         Text {
           anchors.horizontalCenter: parent.horizontalCenter
           textFormat: Text.PlainText
-          text: window.view.kind === "alias" ? "Typing the alias exactly in the root search puts this command on top. Leave it empty to remove it." : ""
+          text: window.view.kind === "alias" ? "Typing the alias exactly in the root search puts this command on top. Leave it empty to remove it."
+            : window.view.kind === "calculator-history" && !window.query ? "Type a calculation in the root search, then copy or paste the answer." : ""
           visible: text.length > 0
           color: window.look.foreground
           opacity: 0.55

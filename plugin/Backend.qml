@@ -10,6 +10,7 @@ import "core/Ranker.js" as Ranker
 import "core/Frecency.js" as Frecency
 import "core/OmarchyMenu.js" as OmarchyMenu
 import "core/RootSearch.js" as RootSearch
+import "core/Calculator.js" as Calculator
 import "services"
 
 // The clone's backend, in-process (SPEC §2.0). It owns the paths, the host
@@ -29,7 +30,7 @@ Item {
 
   property var config: Schema.withConfigDefaults(null)
   property bool directoriesReady: false
-  readonly property bool ready: directoriesReady && settingsStore.loaded && frecencyStore.loaded
+  readonly property bool ready: directoriesReady && settingsStore.loaded && frecencyStore.loaded && calculatorStore.loaded
 
   readonly property var registry: Rpc.createRegistry()
   readonly property double startedAt: Date.now()
@@ -40,6 +41,9 @@ Item {
   property var candidatesById: ({})
   property int candidatesRevision: 0
   readonly property bool loading: menuSource.loading
+  // Bumped when exchange rates or zone offsets arrive, so an open
+  // calculator row re-evaluates.
+  readonly property int calculatorRevision: (calculatorData.rates ? 1 : 0) + calculatorData.ratesFetchedAt + calculatorData.zonesAt
 
   signal notification(string method, var data)
 
@@ -105,6 +109,79 @@ Item {
   function decorated(id) {
     var c = backend.candidatesById[id]
     return c ? RootSearch.decorate(c, backend.searchContext(), backend.deps) : null
+  }
+
+  // ------------------------------------------------------------ calculator
+
+  // 12- or 24-hour clock from the Qt locale, as the system shows it.
+  readonly property bool hour12: Qt.locale().timeFormat(Locale.ShortFormat).toLowerCase().indexOf("ap") >= 0
+
+  function calculatorEnv() {
+    return {
+      nowMs: Date.now(),
+      localOffset: -new Date().getTimezoneOffset(),
+      hour12: backend.hour12,
+      rates: backend.config.currencyRates ? calculatorData.rates : null,
+      zones: calculatorData.zones,
+      remToPxRate: 16                    // Raycast's default remToPxRate [O]
+    }
+  }
+
+  function calculate(query) {
+    try {
+      return Calculator.evaluate(query, backend.calculatorEnv())
+    } catch (e) {
+      backend.log("error", "calculator", "evaluating failed: " + e, { query: query })
+      return null
+    }
+  }
+
+  function saveCalculation(entry) {
+    calculatorStore.update(function(doc) {
+      doc.history = Calculator.pushHistory(doc.history, {
+        id: String(Date.now()), query: entry.query, result: entry.result, copy: entry.copy, kind: entry.kind
+      }, Date.now())
+    })
+    backend.emit("calculator.historyStateChanged", null)
+  }
+
+  // An action on the inline Calculator row or a Calculator History entry.
+  // entry: {query, result, copy, kind}; history: whether it is saved already.
+  function calculatorAction(action, entry, historyId) {
+    switch (action) {
+      case "open":
+      case "copy-answer":
+        if (!historyId) backend.saveCalculation(entry)
+        Util.execArgv(["wl-copy", "--", entry.copy])
+        return { close: true, hud: "Copied to Clipboard" }
+      case "paste-answer":
+        if (!historyId) backend.saveCalculation(entry)
+        // Omarchy's own paste: copies, waits for our window to unmap, types.
+        Util.execArgv(["omarchy-clipboard-paste-text", entry.copy])
+        return { close: true }
+      case "copy-question-answer":
+        if (!historyId) backend.saveCalculation(entry)
+        Util.execArgv(["wl-copy", "--", entry.query + " = " + entry.result])
+        return { close: true, hud: "Copied to Clipboard" }
+      case "open-history":
+        return { push: { kind: "calculator-history", title: "Calculator History" } }
+      case "delete-entry":
+        calculatorStore.update(function(doc) { doc.history = doc.history.filter(function(h) { return h.id !== historyId }) })
+        backend.emit("calculator.historyStateChanged", null)
+        return { toast: { style: "success", title: "Entry deleted" } }
+      case "delete-all-entries":
+        calculatorStore.update(function(doc) { doc.history = [] })
+        backend.emit("calculator.historyStateChanged", null)
+        return { toast: { style: "success", title: "History cleared" } }
+    }
+    throw new Error("Unknown action " + action)
+  }
+
+  function historyEntry(id) {
+    var key = String(id).slice("calculator-history:".length)
+    var list = calculatorStore.loaded ? calculatorStore.doc.history : []
+    for (var i = 0; i < list.length; i++) if (list[i].id === key) return list[i]
+    return null
   }
 
   // ------------------------------------------------------------- execution
@@ -182,6 +259,7 @@ Item {
           return { push: { kind: "menu", menuId: target.id, title: target.label } }
         case "builtin":
           backend.recordVisit(id, query)
+          if (candidate.run.push) return { push: candidate.run.push }
           if (candidate.run.summon) backend.summonPlugin(candidate.run.summon, candidate.run.payload || "{}")
           return { close: true }
         case "fallback":
@@ -310,15 +388,22 @@ Item {
         var query = String(data && data.query || "")
         var view = data && data.view
         var ctx = backend.searchContext()
-        var sections = view && view.kind === "menu"
-          ? RootSearch.submenuSections(backend.candidates, view.menuId, query, ctx, backend.deps)
-          : RootSearch.rootSections(backend.candidates, query, ctx, backend.deps)
+        var sections
+        if (view && view.kind === "menu") sections = RootSearch.submenuSections(backend.candidates, view.menuId, query, ctx, backend.deps)
+        else if (view && view.kind === "calculator-history") sections = RootSearch.historySections(calculatorStore.doc.history, query, ctx.nowMs, Calculator.filterHistory)
+        else {
+          if (query.trim()) ctx.calculation = backend.calculate(query)
+          sections = RootSearch.rootSections(backend.candidates, query, ctx, backend.deps)
+        }
         return sections.map(function(s) {
           return { id: s.id, title: s.title, rows: s.rows.map(function(r) { return r.candidate }) }
         })
       },
       getActions: function(data) {
-        var candidate = backend.decorated(String(data && data.id || ""))
+        var rowId = String(data && data.id || "")
+        if (rowId === RootSearch.CALCULATOR_ID) return RootSearch.actionsFor({ kind: "calculator" })
+        if (rowId.indexOf("calculator-history:") === 0) return RootSearch.actionsFor({ kind: "calculator-history" })
+        var candidate = backend.decorated(rowId)
         if (!candidate) {
           var fallback = RootSearch.FALLBACKS.filter(function(f) { return f.id === data.id })[0]
           if (!fallback) throw new Error("Unknown command " + (data && data.id))
@@ -333,9 +418,44 @@ Item {
           Util.execArgv(["omarchy-launch-browser", RootSearch.fallbackUrl(fallback, data.query)])
           return { close: true }
         }
+        // The calculator row is the query itself, evaluated again.
+        if (data && data.id === RootSearch.CALCULATOR_ID) {
+          var calc = backend.calculate(String(data.query || ""))
+          if (!calc) throw new Error("Nothing to calculate")
+          return backend.calculatorAction(String(data.action || "open"), { query: calc.input, result: calc.result, copy: calc.copy, kind: calc.kind }, "")
+        }
+        if (data && String(data.id).indexOf("calculator-history:") === 0) {
+          var entry = backend.historyEntry(data.id)
+          if (!entry) throw new Error("No such history entry")
+          return backend.calculatorAction(String(data.action || "open"), entry, entry.id)
+        }
         return backend.performAction(data)
       },
       getSearchHistory: function() { return frecencyStore.loaded ? frecencyStore.doc.searchHistory : [] }
+    })
+
+    // Names from Raycast's calculator namespace (ref 02 §2).
+    Rpc.register(backend.registry, "calculator", {
+      calculate: function(data) { return backend.calculate(String(data && data.query || "")) },
+      historyGetAll: function() { return calculatorStore.loaded ? calculatorStore.doc.history : [] },
+      historyDelete: function(data) { return backend.calculatorAction("delete-entry", null, String(data && data.id || "")) },
+      historyDeleteAll: function() { return backend.calculatorAction("delete-all-entries", null, "") },
+      refreshCurrencies: function() {
+        if (!backend.config.currencyRates) throw new Error("currencyRates is off in config.json")
+        calculatorData.fetchRates()
+        return null
+      },
+      getCurrencies: function() {
+        var r = calculatorData.rates
+        return {
+          enabled: backend.config.currencyRates,
+          date: r ? r.date : null,
+          base: r ? r.base : null,
+          currencies: r ? Object.keys(r.rates).concat([r.base]).sort() : [],
+          fetchedAt: calculatorData.ratesFetchedAt || null,
+          zones: Object.keys(calculatorData.zones).length
+        }
+      }
     })
 
     Rpc.register(backend.registry, "frecency", {
@@ -367,9 +487,12 @@ Item {
   }
 
   // Guards and providers describe live system state: refresh them each open.
-  Component.onDestruction: { settingsStore.flush(); frecencyStore.flush() }
+  Component.onDestruction: { settingsStore.flush(); frecencyStore.flush(); calculatorStore.flush() }
   onNotification: function(method, data) {
-    if (method === "window.visibilityChanged" && data && data.visible) menuSource.refresh()
+    if (method === "window.visibilityChanged" && data && data.visible) {
+      menuSource.refresh()
+      calculatorData.refresh()
+    }
   }
 
   // ------------------------------------------------------------ persistence
@@ -405,11 +528,27 @@ Item {
     onMessage: function(level, text, metadata) { backend.log(level, "store", text, metadata) }
   }
 
+  JsonStore {
+    id: calculatorStore
+    ready: backend.directoriesReady
+    path: backend.paths.db + "/" + Schema.documents.calculator.file
+    migrations: Schema.documents.calculator.migrations
+    onMessage: function(level, text, metadata) { backend.log(level, "store", text, metadata) }
+  }
+
+  CalculatorData {
+    id: calculatorData
+    cacheDir: backend.directoriesReady ? backend.paths.cache : ""
+    ratesEnabled: backend.config.currencyRates
+    onMessage: function(level, text, metadata) { backend.log(level, "calculator", text, metadata) }
+  }
+
   // Bumped whenever ranking inputs change, so views re-query.
   readonly property int dataRevision: candidatesRevision + (settingsStore.loaded ? 1 : 0) + (frecencyStore.loaded ? 1 : 0)
   property int storeRevision: 0
   Connections { target: settingsStore; function onChanged() { backend.storeRevision++ } }
   Connections { target: frecencyStore; function onChanged() { backend.storeRevision++ } }
+  Connections { target: calculatorStore; function onChanged() { backend.storeRevision++ } }
 
   // config.json is optional and hand-edited; it hot-reloads on save.
   FileView {
