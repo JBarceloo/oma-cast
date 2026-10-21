@@ -8,8 +8,7 @@ on:
 
 jobs:
   test:
-    # WarpBuild's 2-vCPU Ubuntu runner. Check the label against the workspace's
-    # runner list once WarpBuild finishes reviewing it.
+    # WarpBuild's 2-vCPU Ubuntu runner.
     runs-on: warp-ubuntu-latest-x64-2x
     steps:
       - uses: actions/checkout@v4
