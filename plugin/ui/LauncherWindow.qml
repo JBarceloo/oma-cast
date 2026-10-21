@@ -6,15 +6,24 @@ import qs.Commons as Commons
 import qs.Ui
 import "../core/Agent.js" as Agent
 
-OverlayWindow {
+// Omarchy 4.0.x dropped qs.Ui.OverlayWindow; this is the same full-screen
+// overlay layer the shell's own emoji picker uses.
+PanelWindow {
   id: window
 
   required property var backend
   property var appLibrary: null
+  property bool shown: false
 
   signal dismissRequested()
 
+  visible: window.shown
+  anchors { top: true; bottom: true; left: true; right: true }
+  color: "transparent"
+  exclusionMode: ExclusionMode.Ignore
   WlrLayershell.namespace: "oma-cast"
+  WlrLayershell.layer: WlrLayer.Overlay
+  WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
 
   readonly property var general: {
     window.backend.storeRevision
