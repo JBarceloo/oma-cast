@@ -15,6 +15,15 @@ var BUILTINS = [
     keywords: ["menu", "omarchy"],
     run: { summon: "omarchy.menu", payload: "{\"menu\":\"root\"}" },
     rootSearch: { when: "always" }
+  },
+  {
+    id: "builtin:calculator-history",
+    title: "Calculator History",
+    subtitle: "Calculator",
+    glyph: "\uf1da",                     // nf-fa-history
+    keywords: ["calculator", "calc", "math", "history", "conversions"],
+    run: { push: { kind: "calculator-history", title: "Calculator History" } },
+    rootSearch: { when: "always" }
   }
 ]
 
@@ -78,8 +87,8 @@ function builtinCandidate(def) {
     subtitle: def.subtitle || "",
     keywords: def.keywords || [],
     typeLabel: "Command",
-    glyph: "",
-    glyphFont: "omarchy",
+    glyph: def.glyph || "",
+    glyphFont: def.glyph ? "" : "omarchy",
     run: def.run,
     rootSearch: def.rootSearch || { when: "always" }
   }
@@ -140,6 +149,53 @@ function fallbackRows(query) {
   })
 }
 
+// The inline Calculator row (SPEC §7.2 "Calculator" section) for a
+// Calculator.evaluate() result. Not a stored candidate: its actions re-run
+// the query.
+var CALCULATOR_ID = "calculator:result"
+
+function calculatorCandidate(calc) {
+  return {
+    id: CALCULATOR_ID, type: "command", kind: "calculator",
+    title: calc.result, subtitle: calc.input, typeLabel: "Calculator",
+    calcKind: calc.kind, calcInput: calc.input, calcResult: calc.result,
+    calcInputCaption: calc.inputCaption || "", calcResultCaption: calc.resultCaption || "",
+    rootSearch: { when: "searching" }
+  }
+}
+
+// One saved calculation in Calculator History.
+function historyCandidate(entry, nowMs) {
+  return {
+    id: "calculator-history:" + entry.id, type: "command", kind: "calculator-history",
+    title: entry.result, subtitle: entry.query, typeLabel: relativeTime(entry.createdAt, nowMs),
+    glyph: "\uf1ec", historyId: entry.id, rootSearch: { when: "always" }   // nf-fa-calculator
+  }
+}
+
+function relativeTime(ms, nowMs) {
+  var s = Math.max(0, Math.round((nowMs - ms) / 1000))
+  if (s < 60) return "Just now"
+  if (s < 3600) return Math.floor(s / 60) + " min ago"
+  if (s < 86400) return Math.floor(s / 3600) + " h ago"
+  var d = Math.floor(s / 86400)
+  return d === 1 ? "Yesterday" : d + " days ago"
+}
+
+// Calculator History (ref 04 App. A calculator.history): newest first,
+// filtered by the query, split into Today and Earlier. [I]
+function historySections(history, query, nowMs, filter) {
+  var list = filter(history, query)
+  if (list.length === 0) return []
+  var midnight = new Date(nowMs); midnight.setHours(0, 0, 0, 0)
+  var todays = [], older = []
+  for (var i = 0; i < list.length; i++) (list[i].createdAt >= midnight.getTime() ? todays : older).push({ candidate: historyCandidate(list[i], nowMs), record: null })
+  var out = []
+  if (todays.length) out.push({ id: "history-today", title: "Today", rows: todays })
+  if (older.length) out.push({ id: "history-older", title: "Earlier", rows: older })
+  return out
+}
+
 function rootSections(candidates, query, ctx, deps) {
   var q = String(query || "").trim()
   var decorated = []
@@ -153,6 +209,7 @@ function rootSections(candidates, query, ctx, deps) {
     var searchable = decorated.filter(function(c) { return c.rootSearch.when !== "empty" })
     var results = deps.Ranker.rank(searchable, q, opts)
     var sections = []
+    if (ctx.calculation) sections.push({ id: "calculator", title: "Calculator", rows: [{ candidate: calculatorCandidate(ctx.calculation), record: null }] })
     if (results.length > 0) sections.push({ id: "results", title: "Results", rows: results })
     sections.push({ id: "fallback-commands", title: "Use “" + q + "” with…", rows: fallbackRows(q) })
     return sections
@@ -197,6 +254,22 @@ function submenuSections(candidates, menuId, query, ctx, deps) {
 }
 
 function actionsFor(candidate) {
+  if (candidate.kind === "calculator" || candidate.kind === "calculator-history") {
+    // ↵ copies, Ctrl ↵ pastes (SPEC §8 Calculator) [O]; delete keys are
+    // the Windows `clear` shortcuts (ref 04 §2.8).
+    var calc = [
+      { id: "copy-answer", title: "Copy Answer", shortcut: "↵", section: "primary", icon: "" },
+      { id: "paste-answer", title: "Paste Answer", shortcut: "Ctrl ↵", section: "primary", icon: "" },
+      { id: "copy-question-answer", title: "Copy Question and Answer", shortcut: "Ctrl Shift C", section: "copy", icon: "" }
+    ]
+    if (candidate.kind === "calculator") {
+      calc.push({ id: "open-history", title: "Open Calculator History", shortcut: "", section: "configure", icon: "" })
+    } else {
+      calc.push({ id: "delete-entry", title: "Delete Entry", shortcut: "Ctrl D", section: "delete", icon: "" })
+      calc.push({ id: "delete-all-entries", title: "Delete All Entries", shortcut: "Ctrl Shift D", section: "delete", icon: "" })
+    }
+    return calc
+  }
   var primary
   var list = []
   switch (candidate.kind) {
@@ -261,6 +334,10 @@ if (typeof module !== "undefined") {
     menuCandidate: menuCandidate,
     menuCandidates: menuCandidates,
     builtinCandidate: builtinCandidate,
+    CALCULATOR_ID: CALCULATOR_ID,
+    calculatorCandidate: calculatorCandidate,
+    historyCandidate: historyCandidate,
+    historySections: historySections,
     decorate: decorate,
     rootSections: rootSections,
     submenuSections: submenuSections,

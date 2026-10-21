@@ -67,6 +67,7 @@ Rules for `plugin/core/*.js`: one self-contained file per module (QML `import "x
 
 ```sh
 node --test tests/*.test.js   # unit tests (node's built-in runner; no npm install)
+mise x act@latest -- act push   # run .github/workflows/ci.yml locally in Docker (.actrc maps the WarpBuild label)
 tests/smoke.sh               # live checks: doctor, IPC, toggle latency (<100 ms). Shows/hides the launcher, never types.
 omarchy plugin validate plugin
 
@@ -121,8 +122,18 @@ Works:
   - Compact mode shows only the header until you type.
   - A launch from root clears the query [I].
   - A row is selected on hover only after a real pointer move (Omarchy's PointerMoveGate).
+- **Calculator** (`core/Calculator.js`, our own engine [D]; no `qalc`/fend dependency): a "Calculator" section above Results with Raycast's two-pane card (question → answer, captions below each). It handles:
+  - arithmetic and functions
+  - Soulver-style percentages (`$30 + 20%`, `20% off 50`, `50 as a % of 200`)
+  - ~250 units (`5 ft to cm`, `60 mph * 2 h`, `16px to rem`)
+  - currencies (ECB rates from frankfurter.dev, cached daily in `~/.cache/oma-cast/currencies.json`; turn off with `"currencyRates": false` in config.json)
+  - dates (`3 days from now`, `days until christmas`)
+  - time zones (`time in tokyo`, `3pm london to nyc`; offsets come from one bash `printf %(%z)T` pass because QML has no Intl)
+  - bases (`255 to hex`)
+
+  ↵ copies the answer (HUD), Ctrl+↵ pastes it through `omarchy-clipboard-paste-text`, Ctrl+Shift+C copies "question = answer". Each one saves to **Calculator History** (`db/calculator.json`, 4096 rows / 90 days): a built-in command and pushed view, searchable, Ctrl+D deletes an entry, Ctrl+Shift+D deletes all. RPC: `calculator.calculate|historyGetAll|historyDelete|historyDeleteAll|refreshCurrencies|getCurrencies`. A bare number, word or quantity (`42`, `firefox`, `5 kg`) never produces a row, because the section takes ↵.
 - **Latency:** show → mapped in 37–44 ms, hide in 9–25 ms (`tests/smoke.sh`).
-- **Tests:** baseline 65 unit tests; agent hand-off coverage added (`node --test tests/*.test.js`).
+- **Tests:** root search, calculator and default-agent hand-off coverage (`node --test tests/*.test.js`).
 
 **Default-agent hand-off (fork, 2026-10-20):** user-authorized addition outside the original phase plan. The root fallback "Ask default agent" and Ctrl+Alt+Enter pass the query to `omarchy-agent --prompt` as a literal argv element. `AgentLauncher.qml` checks the configured agent/terminal with a bounded, question-free preflight, prevents overlapping submissions and cancels on hide/unload. `Launcher.qml` dismisses the overlay before launching through `Util.execArgv`. Errors leave the query visible. There are no new dependencies, model APIs, credentials or question-history writes. Existing CLI approval behaviour is inherited. Portable checks do not establish live terminal focus, authentication, or provider compatibility; verify those on Omarchy.
 
@@ -131,6 +142,14 @@ Stubbed / not yet:
 - Vim navigation bindings, Ctrl+P dropdown, Ctrl+T, Ctrl+Shift+K, inline argument pills, alerts.
 - No settings window, so you can't re-enable a disabled command except by editing `~/.local/share/oma-cast/db/settings.json` (delete its `enabled: false`). That's Phase 2.
 - No deep links (`oma-cast://`); Phase 2 or 9.
+- Calculator gaps:
+  - Color, Weather and Flight inline results
+  - pinning history entries, a history detail pane
+  - `remToPxRate` and `workHoursPerDay` settings (16 and 8 are fixed)
+  - mixed units (`5 ft 3 in`), crypto, the unix timestamp
+  - a 24-hour clock only if the Qt locale says so
+
+  Trig takes radians unless given `°`/`deg` [D].
 
 Deviations from the original spec (SPEC §2.0 and the Phase 1 note in §12):
 - A Quickshell plugin instead of Tauri + Node; there's no NDJSON supervisor until Phase 5.
