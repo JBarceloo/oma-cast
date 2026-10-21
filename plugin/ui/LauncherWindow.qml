@@ -4,13 +4,8 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
+import "../core/Agent.js" as Agent
 
-// Launcher surface (SPEC §5.1, §10.2): 750×475 at uiZoom 1, 66 px search
-// header, 42 px footer, centred horizontally about a quarter down the
-// screen, coloured by the active Omarchy theme's [menu] tokens.
-//
-// Views form a navigation stack: root search, a pushed Omarchy submenu, or
-// the alias editor. Each view keeps its own query.
 OverlayWindow {
   id: window
 
@@ -21,7 +16,6 @@ OverlayWindow {
 
   WlrLayershell.namespace: "oma-cast"
 
-  // ------------------------------------------------------------ settings
   readonly property var general: {
     window.backend.storeRevision
     var r = window.backend.ready ? window.backend.callSync("settings.getGeneralSettings", null) : null
@@ -39,7 +33,6 @@ OverlayWindow {
   })
   readonly property var borderSpec: Border.surfaceSpec("menu", "border", Commons.Color.menu.border, Math.max(1, Style.space(2)))
 
-  // --------------------------------------------------------------- state
   property var stack: [{ kind: "root", title: "oma-cast", query: "" }]
   readonly property var view: window.stack[window.stack.length - 1]
   property string query: ""
@@ -69,9 +62,7 @@ OverlayWindow {
     referenceItem: card
   }
 
-  // ----------------------------------------------------------- lifecycle
 
-  // Called on every open, before the surface maps.
   function prepare(payload) {
     popTimer.stop()
     if (typeof payload.query === "string") window.query = payload.query
@@ -81,7 +72,6 @@ OverlayWindow {
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
-  // The shell hid us: start the pop-to-root clock (SPEC §5.1).
   onShownChanged: {
     if (window.shown) return
     window.actionPanelOpen = false
@@ -101,7 +91,6 @@ OverlayWindow {
     window.rebuild(true)
   }
 
-  // ---------------------------------------------------------- navigation
 
   function push(next) {
     var saved = window.stack.slice()
@@ -121,7 +110,6 @@ OverlayWindow {
     if (top.selectedIndex >= 0) window.select(top.selectedIndex)
   }
 
-  // ---------------------------------------------------------------- rows
 
   function rebuild(resetSelection) {
     pointerGate.reset()
@@ -219,7 +207,6 @@ OverlayWindow {
     return -1
   }
 
-  // ------------------------------------------------------------- actions
 
   function actionsForSelected() {
     if (!window.selectedRow) return []
@@ -239,9 +226,6 @@ OverlayWindow {
     if (outcome.close) {
       if (outcome.hud) window.hud(outcome.hud)
       window.dismissRequested()
-      // [I] A launch clears the root search, so the next open starts fresh
-      // instead of appending to the old query. Pushed views stay until
-      // pop-to-root, as the reference describes.
       if (window.atRoot) window.setQuery("")
       return
     }
@@ -249,7 +233,6 @@ OverlayWindow {
     window.rebuild(false)
   }
 
-  // nth action of the selected row: 0 primary (↵), 1 secondary (Ctrl ↵).
   function performNth(n) {
     var list = window.actionsForSelected()
     if (list.length > n) window.perform(list[n].id)
@@ -268,6 +251,11 @@ OverlayWindow {
     window.actionPanelOpen = window.actions.length > 0
   }
 
+  function askAgent() {
+    var r = window.backend.callSync("rootSearch.performAction", { id: Agent.FALLBACK_ID, action: "open", query: window.query })
+    if (!r.ok) window.showToast("failure", r.error)
+  }
+
   function saveAlias() {
     var r = window.backend.callSync("settings.updateCommandSettings", { commandId: window.view.commandId, alias: window.query })
     if (!r.ok) { window.showToast("failure", r.error); return }
@@ -277,7 +265,6 @@ OverlayWindow {
     window.rebuild(false)
   }
 
-  // ------------------------------------------------------------ feedback
 
   function showToast(style, title) {
     window.toast = { style: style, title: String(title || "") }
@@ -290,12 +277,10 @@ OverlayWindow {
     onTriggered: window.toast = null
   }
 
-  // While hidden, a toast becomes a HUD: Omarchy's OSD pill. [D]
   function hud(text) {
     Quickshell.execDetached(["omarchy-shell", "osd", "show", JSON.stringify({ icon: "", message: String(text), duration: 1500 })])
   }
 
-  // ----------------------------------------------------------- the query
 
   function setQuery(next) {
     if (window.query === next) return
@@ -304,7 +289,6 @@ OverlayWindow {
     window.rebuild(true)
   }
 
-  // ↑ on an empty root walks back through queries that launched something.
   function recallHistory(direction) {
     var r = window.backend.callSync("rootSearch.getSearchHistory", null)
     var history = r.ok ? r.data : []
@@ -330,7 +314,6 @@ OverlayWindow {
       window.popToRoot()
       return
     }
-    // pop-back-or-close [O]: clear the search, then go back, then close.
     if (window.query && window.view.kind !== "alias") window.setQuery("")
     else if (!window.atRoot) window.pop()
     else window.dismissRequested()
@@ -344,7 +327,6 @@ OverlayWindow {
     var enter = key === Qt.Key_Return || key === Qt.Key_Enter
 
     if (key === Qt.Key_Escape) { window.handleEscape(shift); return true }
-    // Zoom in / out / reset (SPEC §10.3), persisted as uiZoom. [I] step 0.1
     if (ctrl && (key === Qt.Key_Plus || key === Qt.Key_Equal)) { window.setZoom(window.zoom + 0.1); return true }
     if (ctrl && key === Qt.Key_Minus) { window.setZoom(window.zoom - 0.1); return true }
     if (ctrl && key === Qt.Key_0) { window.setZoom(1); return true }
@@ -364,6 +346,7 @@ OverlayWindow {
       if (enter) { window.saveAlias(); return true }
       if (key === Qt.Key_Space) return true
     } else {
+      if (window.atRoot && enter && ctrl && alt && !shift) { window.askAgent(); return true }
       if (ctrl && key === Qt.Key_K) { window.toggleActionPanel(); return true }
       if (enter && ctrl && shift) { window.performNth(2); return true }
       if (enter && ctrl) { window.performNth(1); return true }
@@ -405,18 +388,17 @@ OverlayWindow {
       && (event.modifiers === Qt.NoModifier || event.modifiers === Qt.ShiftModifier)
   }
 
-  // Ranking inputs changed (apps installed, guards answered, favourites
-  // edited): refresh what is on screen without losing the selection.
   Connections {
     target: window.backend
     function onCandidatesRevisionChanged() { if (window.shown && !window.actionPanelOpen) window.rebuild(false) }
+    function onNotification(method, data) {
+      if (method === "agent.launchFailed" && window.shown) window.showToast("failure", data.message)
+    }
     // Exchange rates or zone offsets arrived: re-evaluate a calculation on screen.
     function onCalculatorRevisionChanged() { if (window.shown && !window.actionPanelOpen && window.query) window.rebuild(false) }
   }
 
-  // ================================================================== UI
 
-  // Clicking outside the card is the layer-shell form of focus loss.
   MouseArea {
     anchors.fill: parent
     onClicked: if (!window.backend.config.keepVisibleOnFocusLoss) window.dismissRequested()
@@ -443,7 +425,6 @@ OverlayWindow {
       Keys.onPressed: function(event) { if (window.handleKey(event)) event.accepted = true }
     }
 
-    // -------------------------------------------------------- header
     Item {
       id: header
       anchors.left: parent.left
@@ -454,7 +435,6 @@ OverlayWindow {
       anchors.rightMargin: card.borderRight
       height: window.headerHeight
 
-      // Omarchy logo at the root, a back arrow inside pushed views.
       Item {
         id: lead
         width: window.px(28)
@@ -515,7 +495,6 @@ OverlayWindow {
         }
       }
 
-      // 2 px loading bar under the header (SPEC §10.2).
       Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
@@ -542,7 +521,6 @@ OverlayWindow {
       }
     }
 
-    // ---------------------------------------------------------- body
     Item {
       id: body
       visible: !window.compact
@@ -568,14 +546,11 @@ OverlayWindow {
           look: window.look
           appLibrary: window.appLibrary
           zoom: window.zoom
-          // Only a real pointer move selects: a row sliding under a still
-          // pointer (open, typing, scrolling) must not steal the cursor.
           onHovered: function(i, item, mouse) { if (!window.actionPanelOpen && pointerGate.moved(item, mouse)) window.select(i) }
           onClicked: function(i) { window.perform("open", i) }
         }
       }
 
-      // Empty states.
       Column {
         anchors.centerIn: parent
         spacing: window.px(8)
@@ -613,7 +588,6 @@ OverlayWindow {
       }
     }
 
-    // -------------------------------------------------------- footer
     Rectangle {
       id: footer
       visible: !window.compact
@@ -634,7 +608,6 @@ OverlayWindow {
         color: Util.alpha(window.look.foreground, 0.12)
       }
 
-      // Left: the active toast, or where we are.
       Row {
         anchors.left: parent.left
         anchors.leftMargin: window.px(16)
@@ -660,7 +633,6 @@ OverlayWindow {
         }
       }
 
-      // Right: primary action ↵ | Actions Ctrl K.
       Row {
         id: footerActions
         anchors.right: parent.right

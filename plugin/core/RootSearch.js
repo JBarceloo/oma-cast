@@ -1,17 +1,12 @@
-// Root search assembly (SPEC §7): candidates from each provider, metadata
-// (alias, favourites, frecency), sections, and the actions each row offers.
-// Ranking itself is Ranker.js; frecency maths is Frecency.js. Both are passed
-// in as `deps` because a core module never imports another (QML + node).
 
-var SUGGESTIONS_LIMIT = 6            // [I] SPEC §7.2 "N≈6"
+var SUGGESTIONS_LIMIT = 6
 
-// Fallback commands, in default fallback order [O names, D URLs].
 var FALLBACKS = [
   { id: "fallback:google", title: "Search Google", icon: "", url: "https://www.google.com/search?q={query}" },
-  { id: "fallback:duckduckgo", title: "Search DuckDuckGo", icon: "", url: "https://duckduckgo.com/?q={query}" }
+  { id: "fallback:duckduckgo", title: "Search DuckDuckGo", icon: "", url: "https://duckduckgo.com/?q={query}" },
+  { id: "fallback:agent", title: "Ask default agent", icon: "󰚩", subtitle: "New terminal session · Ctrl+Alt+Enter" }
 ]
 
-// Built-in commands of our own (the declarative catalog; grows per phase).
 var BUILTINS = [
   {
     id: "builtin:omarchy-menu",
@@ -50,7 +45,7 @@ function appCandidate(entry) {
     title: String(entry.name || desktopId),
     subtitle: "",
     keywords: keywords,
-    bundleId: desktopId,               // matched only for queries with "." [O]
+    bundleId: desktopId,
     typeLabel: "Application",
     appId: desktopId,
     iconName: String(entry.icon || ""),
@@ -58,8 +53,6 @@ function appCandidate(entry) {
   }
 }
 
-// One Omarchy menu item. Top-level menus show on the empty root ("Commands");
-// deeper items only while searching, or the root would list ~400 rows.
 function menuCandidate(tree, item, guards, deps) {
   var crumbs = deps.OmarchyMenu.breadcrumb(tree, item.id)
   var keywords = item.aliases.map(words).filter(function(k) { return k })
@@ -101,8 +94,6 @@ function builtinCandidate(def) {
   }
 }
 
-// All Omarchy rows that are visible under the current guard answers, plus
-// rows from runtime providers (fonts, power profiles).
 function menuCandidates(tree, guards, providerItems, deps) {
   var out = []
   for (var i = 0; i < tree.order.length; i++) {
@@ -124,7 +115,6 @@ function menuCandidates(tree, guards, providerItems, deps) {
   return out
 }
 
-// Attach per-user metadata. Returns new objects; inputs stay untouched.
 function decorate(candidate, ctx, deps) {
   var out = {}
   for (var k in candidate) out[k] = candidate[k]
@@ -151,7 +141,7 @@ function fallbackRows(query) {
   return FALLBACKS.map(function(f) {
     return {
       candidate: {
-        id: f.id, type: "command", kind: "fallback", title: f.title, subtitle: query,
+        id: f.id, type: "command", kind: "fallback", title: f.title, subtitle: f.subtitle || query,
         typeLabel: "Fallback", glyph: f.icon, url: f.url, rootSearch: { when: "searching" }
       },
       record: null
@@ -206,9 +196,6 @@ function historySections(history, query, nowMs, filter) {
   return out
 }
 
-// Sections for the root view (SPEC §7.2):
-//   empty query: Favorites, Suggestions, Commands, Applications
-//   query:       Calculator, Results, Use "<q>" with…
 function rootSections(candidates, query, ctx, deps) {
   var q = String(query || "").trim()
   var decorated = []
@@ -250,8 +237,6 @@ function rootSections(candidates, query, ctx, deps) {
   return out
 }
 
-// A pushed Omarchy submenu: its visible children in menu order, or, while
-// searching, every descendant ranked (the Omarchy menu searches the same way).
 function submenuSections(candidates, menuId, query, ctx, deps) {
   var prefix = "omarchy:" + menuId + "."
   var q = String(query || "").trim()
@@ -263,14 +248,11 @@ function submenuSections(candidates, menuId, query, ctx, deps) {
     if (!q && rest.indexOf(".") >= 0) continue
     inside.push(decorate(c, ctx, deps))
   }
-  // Unfiltered children all share the breadcrumb of the open menu; drop it.
   if (!q) return inside.length ? [{ id: "menu", title: "", rows: inside.map(function(c) { c.subtitle = ""; return { candidate: c, record: null } }) }] : []
   var ranked = deps.Ranker.rank(inside, q, rankOptions(ctx))
   return ranked.length ? [{ id: "results", title: "Results", rows: ranked }] : []
 }
 
-// Actions for a row (SPEC §10.2 action panel, §10.3 shortcuts). The first is
-// primary (↵), the second secondary (Ctrl ↵).
 function actionsFor(candidate) {
   if (candidate.kind === "calculator" || candidate.kind === "calculator-history") {
     // ↵ copies, Ctrl ↵ pastes (SPEC §8 Calculator) [O]; delete keys are
@@ -323,7 +305,6 @@ function actionsFor(candidate) {
   return list
 }
 
-// Favourite ordering: returns the new {id: order} map for an action.
 function reorderFavorites(commands, id, action) {
   var favs = []
   for (var key in commands) if (typeof commands[key].favoriteOrder === "number") favs.push({ id: key, order: commands[key].favoriteOrder })

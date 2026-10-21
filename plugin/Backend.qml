@@ -10,12 +10,10 @@ import "core/Ranker.js" as Ranker
 import "core/Frecency.js" as Frecency
 import "core/OmarchyMenu.js" as OmarchyMenu
 import "core/RootSearch.js" as RootSearch
+import "core/Agent.js" as Agent
 import "core/Calculator.js" as Calculator
 import "services"
 
-// The clone's backend, in-process (SPEC §2.0). It owns the paths, the host
-// config, the persisted documents, the root-search providers and the method
-// registry; the launcher UI and the IPC handler both go through call().
 Item {
   id: backend
 
@@ -23,9 +21,7 @@ Item {
   readonly property var paths: Paths.resolve(function(name) { return Quickshell.env(name) })
   readonly property string desktop: Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE") ? "hyprland" : "unknown"
 
-  // Omarchy's shared app library (shell.appLibrary), injected by Launcher.qml.
   property var appLibrary: null
-  // Asks the shell to summon a plugin in-process; injected by Launcher.qml.
   property var summon: null
 
   property var config: Schema.withConfigDefaults(null)
@@ -36,18 +32,16 @@ Item {
   readonly property double startedAt: Date.now()
   readonly property var deps: ({ Ranker: Ranker, Frecency: Frecency, OmarchyMenu: OmarchyMenu })
 
-  // Every root-search candidate, rebuilt when a provider changes.
   property var candidates: []
   property var candidatesById: ({})
   property int candidatesRevision: 0
-  readonly property bool loading: menuSource.loading
+  readonly property bool loading: menuSource.loading || agentLauncher.checking
   // Bumped when exchange rates or zone offsets arrive, so an open
   // calculator row re-evaluates.
   readonly property int calculatorRevision: (calculatorData.rates ? 1 : 0) + calculatorData.ratesFetchedAt + calculatorData.zonesAt
 
   signal notification(string method, var data)
 
-  // ------------------------------------------------------------- dispatch
 
   function call(method, data) { return Rpc.call(backend.registry, method, data) }
   function callSync(method, data) { return Rpc.callSync(backend.registry, method, data) }
@@ -70,11 +64,9 @@ Item {
     else console.log(line)
   }
 
-  // ------------------------------------------------------------ candidates
 
   function appEntries() {
     if (backend.appLibrary) return backend.appLibrary.sortedEntries("").map(function(row) { return row.entry })
-    // Outside a menu-kind load the shell hands us no library; read entries directly.
     return (DesktopEntries.applications.values || []).filter(function(e) { return !e.noDisplay })
   }
 
@@ -186,8 +178,6 @@ Item {
 
   // ------------------------------------------------------------- execution
 
-  // The shell lets a third-party plugin summon only itself in-process, so
-  // other plugins (omarchy.menu, omarchy.clipboard) go through its CLI.
   function summonPlugin(id, payload) {
     if (backend.summon && backend.summon(id, payload)) return
     Quickshell.execDetached(["omarchy-shell", "shell", "summon", id, payload || "{}"])
@@ -219,7 +209,6 @@ Item {
     backend.emit("settings.commandSettingsChanged", { commandId: id })
   }
 
-  // The parent menu an action lives in, for "Open in Omarchy Menu".
   function omarchyRouteFor(candidate) {
     if (candidate.kind === "omarchy-action") {
       var item = menuSource.tree.items[candidate.menuId]
@@ -228,8 +217,6 @@ Item {
     return candidate.kind === "omarchy-link" ? candidate.target : candidate.menuId
   }
 
-  // One action on one row. Returns what the UI should do next:
-  // { close, push: {view}, toast: {style, title}, hud: "text" }.
   function performAction(data) {
     var id = String(data && data.id || "")
     var action = String(data && data.action || "open")
@@ -308,11 +295,9 @@ Item {
     throw new Error("Unknown action " + action)
   }
 
-  // ------------------------------------------------------------- services
 
   function registerServices() {
     Rpc.register(backend.registry, "system", {
-      // Raycast's probe answers with nothing [O]; the round trip is the point.
       healthPing: function() { return null },
       healthDatabase: function() {
         var t0 = Date.now()
@@ -322,7 +307,6 @@ Item {
           workMs: Date.now() - t0,
           settings: { loaded: settingsStore.loaded, readOnly: settingsStore.readOnly, error: settingsStore.lastError },
           frecency: { loaded: frecencyStore.loaded, readOnly: frecencyStore.readOnly, error: frecencyStore.lastError },
-          // Kept for Phase 0 callers.
           loaded: settingsStore.loaded, readOnly: settingsStore.readOnly, error: settingsStore.lastError
         }
       },
@@ -345,7 +329,6 @@ Item {
         if (!settingsStore.loaded) throw new Error("settings not loaded")
         return settingsStore.doc.general
       },
-      // Partial update; only known keys with a matching type are accepted.
       updateGeneralSettings: function(data) {
         if (!settingsStore.loaded) throw new Error("settings not loaded")
         if (settingsStore.readOnly) throw new Error("settings are read-only: " + (settingsStore.lastError || "written by a newer build"))
@@ -361,7 +344,6 @@ Item {
       },
       getAllCommandSettings: function() { return settingsStore.doc.commands },
       getCommandSettings: function(data) { return settingsStore.doc.commands[String(data && data.commandId || "")] || {} },
-      // {commandId, alias?, enabled?}; null clears a field. [O name]
       updateCommandSettings: function(data) {
         var id = String(data && data.commandId || "")
         if (!backend.candidatesById[id]) throw new Error("Unknown command " + id)
@@ -383,7 +365,6 @@ Item {
     })
 
     Rpc.register(backend.registry, "rootSearch", {
-      // {query, view?: {kind:"menu", menuId}} -> sections of plain rows.
       search: function(data) {
         var query = String(data && data.query || "")
         var view = data && data.view
@@ -412,9 +393,12 @@ Item {
         return RootSearch.actionsFor(candidate)
       },
       performAction: function(data) {
-        // Fallbacks are rows, not stored candidates.
         var fallback = RootSearch.FALLBACKS.filter(function(f) { return f.id === (data && data.id) })[0]
         if (fallback) {
+          if (fallback.id === Agent.FALLBACK_ID) {
+            agentLauncher.start(data.query)
+            return { pending: true }
+          }
           Util.execArgv(["omarchy-launch-browser", RootSearch.fallbackUrl(fallback, data.query)])
           return { close: true }
         }
@@ -486,16 +470,21 @@ Item {
     function onValuesChanged() { rebuildTimer.restart() }
   }
 
-  // Guards and providers describe live system state: refresh them each open.
   Component.onDestruction: { settingsStore.flush(); frecencyStore.flush(); calculatorStore.flush() }
   onNotification: function(method, data) {
     if (method === "window.visibilityChanged" && data && data.visible) {
       menuSource.refresh()
       calculatorData.refresh()
     }
+    if (method === "window.visibilityChanged" && data && !data.visible) agentLauncher.cancel()
   }
 
-  // ------------------------------------------------------------ persistence
+  AgentLauncher {
+    id: agentLauncher
+    onPrepared: function(argv) { backend.emit("agent.launchReady", { argv: argv }) }
+    onFailed: function(message) { backend.emit("agent.launchFailed", { message: message }) }
+  }
+
 
   Process {
     id: mkdirs
@@ -543,14 +532,12 @@ Item {
     onMessage: function(level, text, metadata) { backend.log(level, "calculator", text, metadata) }
   }
 
-  // Bumped whenever ranking inputs change, so views re-query.
   readonly property int dataRevision: candidatesRevision + (settingsStore.loaded ? 1 : 0) + (frecencyStore.loaded ? 1 : 0)
   property int storeRevision: 0
   Connections { target: settingsStore; function onChanged() { backend.storeRevision++ } }
   Connections { target: frecencyStore; function onChanged() { backend.storeRevision++ } }
   Connections { target: calculatorStore; function onChanged() { backend.storeRevision++ } }
 
-  // config.json is optional and hand-edited; it hot-reloads on save.
   FileView {
     path: backend.directoriesReady ? backend.paths.configFile : ""
     watchChanges: true

@@ -2,9 +2,6 @@ import QtQuick
 import Quickshell
 import qs.Commons
 
-// One list row (SPEC §10.2): 22 px icon, title, secondary subtitle, and right
-// accessories in Raycast's order: alias badge, ✓ state, type label. Section
-// headers use the same delegate with rowKind "section".
 Item {
   id: row
 
