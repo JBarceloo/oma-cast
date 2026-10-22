@@ -433,6 +433,30 @@ PanelWindow {
     window.rebuild(true)
   }
 
+  function pasteClipboard() {
+    clipboardInput.clear()
+    clipboardInput.paste()
+    var text = clipboardInput.text.replace(/[\r\n\u2028\u2029]+/g, " ")
+    clipboardInput.clear()
+    if (!text) return
+    if (window.actionPanelOpen) actionPanel.filter += text
+    else if (window.argFocus >= 0) {
+      var name = window.argDefs[window.argFocus].name
+      var values = Object.assign({}, window.argValues)
+      values[name] = (values[name] || "") + text
+      window.argValues = values
+    } else {
+      if (window.view.kind === "alias") text = text.replace(/\s/g, "")
+      window.setQuery(window.query + text)
+    }
+  }
+
+  TextEdit {
+    id: clipboardInput
+    visible: false
+    textFormat: TextEdit.PlainText
+  }
+
   function recallHistory(direction) {
     var r = window.backend.callSync("rootSearch.getSearchHistory", null)
     var history = r.ok ? r.data : []
@@ -511,6 +535,12 @@ PanelWindow {
     if (ctrl && key === Qt.Key_Minus) { window.setZoom(window.zoom - 0.1); return true }
     if (ctrl && key === Qt.Key_0) { window.setZoom(1); return true }
     if (ctrl && key === Qt.Key_BracketLeft) { window.closePopups(); window.pop(); return true }
+    // Ctrl+V, Ctrl+Shift+V (the terminal habit) and Shift+Insert paste.
+    var meta = (event.modifiers & Qt.MetaModifier) !== 0
+    if ((key === Qt.Key_V && ctrl && !alt && !meta) || (key === Qt.Key_Insert && shift && !ctrl && !alt && !meta)) {
+      window.pasteClipboard()
+      return true
+    }
 
     if (window.aboutOpen) {
       if (ctrl && shift && key === Qt.Key_K) window.aboutOpen = false
