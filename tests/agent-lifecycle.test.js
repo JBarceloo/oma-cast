@@ -123,7 +123,10 @@ test("agent shortcut is limited to root search and preserves normal Enter action
   const window = {
     atRoot: true, actionPanelOpen: false, view: { kind: "root" },
     askAgent: () => events.push("agent"), performNth: n => events.push(n),
-    saveAlias: () => events.push("save-alias")
+    saveAlias: () => events.push("save-alias"),
+    argFocus: -1, argDefs: [],
+    isActionPanelKey: () => false,
+    direction: () => 0
   }
   const context = vm.createContext({ Qt, window, event: null })
   function press(modifiers) {

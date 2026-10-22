@@ -56,7 +56,8 @@ Item {
   }
 
   function run(commandId) {
-    var r = backend.callSync("rootSearch.performAction", { id: commandId, action: "open", query: "" })
+    // `oma-cast run` is explicit, so it skips the confirmation alert.
+    var r = backend.callSync("rootSearch.performAction", { id: commandId, action: "open", query: "", confirmed: true })
     if (!r.ok) return r
     var outcome = r.data || {}
     if (outcome.push) {

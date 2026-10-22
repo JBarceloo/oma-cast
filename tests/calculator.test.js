@@ -117,6 +117,38 @@ test("captions and copy text", () => {
   assert.equal(C.words(-21), "Minus Twenty-one")
 })
 
+test("mixed units add up", () => {
+  assert.equal(result("5 ft 3 in"), "5.25 ft")
+  assert.equal(result("5 ft 3 in to cm"), "160.02 cm")
+  assert.equal(result("1 m 50 cm"), "1.5 m")
+  assert.equal(result("1 h 30 min + 45 min"), "2.25 hours")
+  assert.match(result("3 days 4 hours from now"), /^Thursday, 22 October 2026 at 8:06 PM$/)
+  for (const q of ["2 kg 3", "10 usd 5 usd", "100 °F 3 °C"]) assert.equal(C.evaluate(q, env), null, q)
+})
+
+test("work time follows workHoursPerDay and remToPxRate is configurable", () => {
+  assert.equal(result("40 hours in work days"), "5 work days")
+  assert.equal(result("2 work weeks to hours"), "80 hours")
+  assert.equal(result("15 hours in workdays", { ...env, workHoursPerDay: 7.5 }), "2 work days")
+  assert.equal(result("16px to rem", { ...env, remToPxRate: 10 }), "1.6 rem")
+  assert.equal(C.evaluate("3 workdays from now", env), null, "work days are not calendar days")
+})
+
+test("unix timestamps", () => {
+  const stamp = C.evaluate("unix 1700000000", env)
+  assert.equal(stamp.result, "Tuesday, 14 November 2023 at 5:13 PM")
+  assert.equal(stamp.inputCaption, "Unix Timestamp")
+  assert.equal(result("1700000000 to date"), stamp.result)
+  assert.equal(result("1700000000000 to date"), stamp.result, "13 digits are milliseconds")
+  assert.equal(result("timestamp 1700000000"), stamp.result)
+  const now = C.evaluate("now to unix", env)
+  assert.deepEqual([now.result, now.copy, now.resultCaption], [String(NOW / 1000), String(NOW / 1000), "Unix Timestamp"])
+  assert.equal(result("unix time"), String(NOW / 1000))
+  assert.equal(result("unix now"), String(NOW / 1000))
+  assert.equal(result("2023-11-14 to unix"), "1699938000")
+  for (const q of ["unix", "epoch", "timestamp", "date"]) assert.equal(C.evaluate(q, env), null, q)
+})
+
 test("history is newest first, unique, pruned after 90 days and capped", () => {
   let h = []
   h = C.pushHistory(h, { id: "1", query: "2+2", result: "4", copy: "4", kind: "math" }, NOW - 100 * 864e5)

@@ -7,7 +7,23 @@ var FALLBACKS = [
   { id: "fallback:agent", title: "Ask default agent", icon: "󰚩", subtitle: "New terminal session · Ctrl+Alt+Enter" }
 ]
 
+// Web searches as root commands with an inline argument pill (ref 04 §2.2
+// "inline argument inputs"; Raycast ships these as quicklinks) [D].
+function webSearch(fallback, keywords) {
+  return {
+    id: "builtin:" + fallback.id.slice("fallback:".length) + "-search",
+    title: fallback.title,
+    subtitle: "Quicklink",
+    glyph: fallback.icon,
+    keywords: keywords,
+    arguments: [{ name: "query", placeholder: "Query", required: true }],
+    run: { url: fallback.url }
+  }
+}
+
 var BUILTINS = [
+  webSearch(FALLBACKS[0], []),
+  webSearch(FALLBACKS[1], ["ddg"]),
   {
     id: "builtin:omarchy-menu",
     title: "Omarchy Menu",
@@ -90,6 +106,7 @@ function builtinCandidate(def) {
     glyph: def.glyph || "",
     glyphFont: def.glyph ? "" : "omarchy",
     run: def.run,
+    arguments: def.arguments || [],
     rootSearch: def.rootSearch || { when: "always" }
   }
 }
@@ -196,11 +213,25 @@ function historySections(history, query, nowMs, filter) {
   return out
 }
 
+// The root dropdown (Ctrl+P, ref 04 §2.2 toggleFilter). Raycast's root has
+// no dropdown; this one narrows root search by type. [D]
+var FILTERS = [
+  { id: "all", title: "All" },
+  { id: "applications", title: "Applications" },
+  { id: "commands", title: "Commands" }
+]
+
+function passesFilter(candidate, filter) {
+  if (!filter || filter === "all") return true
+  return (candidate.type === "application") === (filter === "applications")
+}
+
 function rootSections(candidates, query, ctx, deps) {
   var q = String(query || "").trim()
+  var filtered = ctx.filter && ctx.filter !== "all"
   var decorated = []
   for (var i = 0; i < candidates.length; i++) {
-    if (!isEnabled(candidates[i], ctx)) continue
+    if (!isEnabled(candidates[i], ctx) || !passesFilter(candidates[i], ctx.filter)) continue
     decorated.push(decorate(candidates[i], ctx, deps))
   }
   var opts = rankOptions(ctx)
@@ -209,9 +240,9 @@ function rootSections(candidates, query, ctx, deps) {
     var searchable = decorated.filter(function(c) { return c.rootSearch.when !== "empty" })
     var results = deps.Ranker.rank(searchable, q, opts)
     var sections = []
-    if (ctx.calculation) sections.push({ id: "calculator", title: "Calculator", rows: [{ candidate: calculatorCandidate(ctx.calculation), record: null }] })
+    if (ctx.calculation && !filtered) sections.push({ id: "calculator", title: "Calculator", rows: [{ candidate: calculatorCandidate(ctx.calculation), record: null }] })
     if (results.length > 0) sections.push({ id: "results", title: "Results", rows: results })
-    sections.push({ id: "fallback-commands", title: "Use “" + q + "” with…", rows: fallbackRows(q) })
+    if (!filtered) sections.push({ id: "fallback-commands", title: "Use “" + q + "” with…", rows: fallbackRows(q) })
     return sections
   }
 
@@ -325,11 +356,82 @@ function fallbackUrl(candidate, query) {
   return String(candidate.url || "").replace("{query}", encodeURIComponent(String(query || "").trim()))
 }
 
+// {name} placeholders filled from argument values, URL-encoded.
+function fillArguments(template, values) {
+  return String(template || "").replace(/\{(\w+)\}/g, function(_, name) {
+    return encodeURIComponent(String((values && values[name]) || "").trim())
+  })
+}
+
+// Index of the first required argument left empty, or -1.
+function missingArgument(defs, values) {
+  for (var i = 0; i < (defs || []).length; i++) {
+    if (defs[i].required && !String((values && values[defs[i].name]) || "").trim()) return i
+  }
+  return -1
+}
+
+// Destructive commands ask first, as Raycast's System commands do ("Are
+// you sure you want to shut down?", ref 04 §1) [O]. Omarchy's own scripts
+// don't confirm.
+var CONFIRMATIONS = {
+  "omarchy:system.shutdown": { title: "Shut Down", message: "Are you sure you want to shut down?", primary: "Shut Down" },
+  "omarchy:system.reboot": { title: "Restart", message: "Are you sure you want to restart?", primary: "Restart" },
+  "omarchy:system.logout": { title: "Log Out", message: "Are you sure you want to log out?", primary: "Log Out" }
+}
+
+function confirmationFor(id, action) {
+  var c = action === "open" ? CONFIRMATIONS[id] : null
+  if (action === "delete-all-entries") c = { title: "Delete All Entries", message: "This removes every calculation from Calculator History.", primary: "Delete All" }
+  return c ? { title: c.title, message: c.message, primary: c.primary, destructive: true } : null
+}
+
+// The About panel (Ctrl+Shift+K, ref 04 §2.5 toggleAboutPanel): what a row
+// is and where it comes from, as label/value pairs. [I]
+function aboutFor(c, nowMs) {
+  var rows = []
+  function add(label, value) {
+    if (value !== undefined && value !== null && String(value) !== "") rows.push({ label: label, value: String(value) })
+  }
+  if (c.kind === "calculator") {
+    add("Question", c.calcInput)
+    add("Answer", c.calcResult)
+    add("Type", c.calcResultCaption)
+    return rows
+  }
+  if (c.kind === "calculator-history") {
+    add("Question", c.subtitle)
+    add("Answer", c.title)
+    add("Saved", c.typeLabel)
+    return rows
+  }
+  add("Title", c.title)
+  add("Type", c.typeLabel)
+  if (c.kind !== "fallback") add("Location", c.subtitle)
+  add("ID", c.id)
+  if (c.kind === "app") add("Desktop Entry", c.appId + ".desktop")
+  if (c.kind === "omarchy-action") add("Command", c.action)
+  if (c.kind === "omarchy-link") add("Opens", c.target)
+  add("URL", c.url || (c.run && c.run.url))
+  add("Arguments", (c.arguments || []).map(function(a) { return a.name + (a.required ? "" : " (optional)") }).join(", "))
+  add("Keywords", (c.keywords || []).join(", "))
+  add("Alias", c.alias)
+  if (typeof c.favoriteOrder === "number") add("Favorite", "#" + (c.favoriteOrder + 1))
+  if (c.openedAt) add("Last Opened", relativeTime(c.openedAt, nowMs))
+  if (c.frecency > 1) add("Frecency", Math.round(c.frecency * 10) / 10)
+  return rows
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     SUGGESTIONS_LIMIT: SUGGESTIONS_LIMIT,
     FALLBACKS: FALLBACKS,
     BUILTINS: BUILTINS,
+    FILTERS: FILTERS,
+    fillArguments: fillArguments,
+    missingArgument: missingArgument,
+    confirmationFor: confirmationFor,
+    aboutFor: aboutFor,
     appCandidate: appCandidate,
     menuCandidate: menuCandidate,
     menuCandidates: menuCandidates,

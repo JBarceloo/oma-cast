@@ -105,8 +105,10 @@ Item {
 
   // ------------------------------------------------------------ calculator
 
-  // 12- or 24-hour clock from the Qt locale, as the system shows it.
-  readonly property bool hour12: Qt.locale().timeFormat(Locale.ShortFormat).toLowerCase().indexOf("ap") >= 0
+  // 12- or 24-hour clock from config.json clockFormat, else the Qt locale.
+  readonly property bool hour12: backend.config.clockFormat === "auto"
+    ? Qt.locale().timeFormat(Locale.ShortFormat).toLowerCase().indexOf("ap") >= 0
+    : backend.config.clockFormat === "12h"
 
   function calculatorEnv() {
     return {
@@ -115,7 +117,8 @@ Item {
       hour12: backend.hour12,
       rates: backend.config.currencyRates ? calculatorData.rates : null,
       zones: calculatorData.zones,
-      remToPxRate: 16                    // Raycast's default remToPxRate [O]
+      remToPxRate: backend.config.remToPxRate,
+      workHoursPerDay: backend.config.workHoursPerDay
     }
   }
 
@@ -245,6 +248,14 @@ Item {
           if (!target) return { toast: { style: "failure", title: "Menu " + candidate.target + " not found" } }
           return { push: { kind: "menu", menuId: target.id, title: target.label } }
         case "builtin":
+          if (candidate.run.url) {
+            var values = (data && data.arguments) || {}
+            var missing = RootSearch.missingArgument(candidate.arguments, values)
+            if (missing >= 0) throw new Error("Type a " + candidate.arguments[missing].placeholder.toLowerCase() + " first")
+            backend.recordVisit(id, query)
+            Util.execArgv(["omarchy-launch-browser", RootSearch.fillArguments(candidate.run.url, values)])
+            return { close: true }
+          }
           backend.recordVisit(id, query)
           if (candidate.run.push) return { push: candidate.run.push }
           if (candidate.run.summon) backend.summonPlugin(candidate.run.summon, candidate.run.payload || "{}")
@@ -290,7 +301,11 @@ Item {
         return { toast: { style: "success", title: "Ranking reset" } }
       case "disable":
         backend.updateCommand(id, function(s) { s.enabled = false; return s })
-        return { toast: { style: "success", title: candidate.title + " disabled" } }
+        // Undo on Ctrl+T: there is no settings window to re-enable it yet.
+        return { toast: { style: "success", title: candidate.title + " disabled", actions: [
+          { id: "undo", title: "Undo", done: candidate.title + " enabled",
+            call: { method: "settings.updateCommandSettings", data: { commandId: id, enabled: true } } }
+        ] } }
     }
     throw new Error("Unknown action " + action)
   }
@@ -337,6 +352,8 @@ Item {
         for (var key in patch) {
           if (current[key] === undefined) throw new Error("Unknown general setting " + key)
           if (typeof patch[key] !== typeof current[key]) throw new Error("Setting " + key + " must be a " + typeof current[key])
+          var choices = Schema.generalChoices[key]
+          if (choices && choices.indexOf(patch[key]) < 0) throw new Error("Setting " + key + " must be one of " + choices.join(", "))
         }
         settingsStore.update(function(doc) { for (var k in patch) doc.general[k] = patch[k] })
         backend.emit("settings.generalSettingsChanged", settingsStore.doc.general)
@@ -373,7 +390,8 @@ Item {
         if (view && view.kind === "menu") sections = RootSearch.submenuSections(backend.candidates, view.menuId, query, ctx, backend.deps)
         else if (view && view.kind === "calculator-history") sections = RootSearch.historySections(calculatorStore.doc.history, query, ctx.nowMs, Calculator.filterHistory)
         else {
-          if (query.trim()) ctx.calculation = backend.calculate(query)
+          ctx.filter = String(data && data.filter || "all")
+          if (query.trim() && ctx.filter === "all") ctx.calculation = backend.calculate(query)
           sections = RootSearch.rootSections(backend.candidates, query, ctx, backend.deps)
         }
         return sections.map(function(s) {
@@ -392,7 +410,31 @@ Item {
         }
         return RootSearch.actionsFor(candidate)
       },
+      getItemInfo: function(data) {
+        var rowId = String(data && data.id || "")
+        var nowMs = Date.now()
+        if (rowId === RootSearch.CALCULATOR_ID) {
+          var calc = backend.calculate(String(data.query || ""))
+          return calc ? RootSearch.aboutFor(RootSearch.calculatorCandidate(calc), nowMs) : []
+        }
+        if (rowId.indexOf("calculator-history:") === 0) {
+          var entry = backend.historyEntry(rowId)
+          return entry ? RootSearch.aboutFor(RootSearch.historyCandidate(entry, nowMs), nowMs) : []
+        }
+        var candidate = backend.decorated(rowId)
+        if (!candidate) {
+          var f = RootSearch.FALLBACKS.filter(function(x) { return x.id === rowId })[0]
+          if (!f) throw new Error("Unknown command " + rowId)
+          return RootSearch.aboutFor({ id: f.id, kind: "fallback", title: f.title, typeLabel: "Fallback", url: f.url }, nowMs)
+        }
+        return RootSearch.aboutFor(candidate, nowMs)
+      },
       performAction: function(data) {
+        // Destructive commands come back as a confirmation unless confirmed.
+        if (!(data && data.confirmed)) {
+          var confirm = RootSearch.confirmationFor(String(data && data.id || ""), String(data && data.action || "open"))
+          if (confirm) return { confirm: confirm }
+        }
         var fallback = RootSearch.FALLBACKS.filter(function(f) { return f.id === (data && data.id) })[0]
         if (fallback) {
           if (fallback.id === Agent.FALLBACK_ID) {

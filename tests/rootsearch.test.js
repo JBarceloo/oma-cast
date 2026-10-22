@@ -144,3 +144,39 @@ test("favourite reordering", () => {
 test("fallback URLs encode the query", () => {
   assert.equal(RS.fallbackUrl(RS.FALLBACKS[0], " a&b c "), "https://www.google.com/search?q=a%26b%20c")
 })
+
+test("web searches take an inline argument", () => {
+  const google = results("google")[0].rows[0].candidate
+  assert.equal(google.id, "builtin:google-search")
+  assert.deepEqual(google.arguments.map((a) => a.name), ["query"])
+  assert.equal(RS.missingArgument(google.arguments, {}), 0)
+  assert.equal(RS.missingArgument(google.arguments, { query: " a b " }), -1)
+  assert.equal(RS.fillArguments(google.run.url, { query: " a&b " }), "https://www.google.com/search?q=a%26b")
+  assert.equal(results("ddg")[0].rows[0].candidate.id, "builtin:duckduckgo-search")
+})
+
+test("the root filter narrows by type and drops calculator and fallbacks", () => {
+  const apps = results("", ctx({ filter: "applications" }))
+  assert.deepEqual(apps.map((s) => s.id), ["apps"])
+  const commands = results("lock", ctx({ filter: "commands", calculation: { result: "1" } }))
+  assert.ok(commands.every((s) => s.id === "results"))
+  assert.ok(commands[0].rows.every((r) => r.candidate.type === "command"))
+  assert.deepEqual(RS.FILTERS.map((f) => f.id), ["all", "applications", "commands"])
+})
+
+test("power commands and delete-all ask for confirmation", () => {
+  assert.equal(RS.confirmationFor("omarchy:system.shutdown", "open").primary, "Shut Down")
+  assert.equal(RS.confirmationFor("omarchy:system.shutdown", "copy-command"), null)
+  assert.equal(RS.confirmationFor("omarchy:system.lock", "open"), null)
+  assert.ok(RS.confirmationFor("calculator-history:x", "delete-all-entries").destructive)
+})
+
+test("the about panel describes a row", () => {
+  const lock = results("lock")[0].rows[0].candidate
+  const about = Object.fromEntries(RS.aboutFor(lock, NOW).map((r) => [r.label, r.value]))
+  assert.equal(about.Command, "omarchy-system-lock")
+  assert.equal(about.ID, "omarchy:system.lock")
+  assert.equal(about.Location, "System")
+  const calc = RS.aboutFor({ kind: "calculator", calcInput: "2+2", calcResult: "4", calcResultCaption: "Four" }, NOW)
+  assert.deepEqual(calc.map((r) => r.label), ["Question", "Answer", "Type"])
+})

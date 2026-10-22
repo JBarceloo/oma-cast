@@ -68,7 +68,31 @@ var configDefaults = {
   keepVisibleOnFocusLoss: false,
   // Daily ECB reference rates from frankfurter.dev for currency conversion
   // (SPEC §8 Calculator). The only network request oma-cast makes. [D]
-  currencyRates: true
+  currencyRates: true,
+  // Calculator preferences named after Raycast's (ref 04 App. B) [O].
+  remToPxRate: 16,
+  workHoursPerDay: 8,
+  // "auto" follows the Qt locale; "12h" or "24h" forces a clock. [D]
+  clockFormat: "auto"
+}
+
+// Values a config key or general setting may take, beyond its type.
+var configChoices = {
+  clockFormat: ["auto", "12h", "24h"]
+}
+
+var generalChoices = {
+  windowMode: ["expanded", "compact"],
+  escapeKeyBehavior: ["pop-back-or-close", "close-and-pop-to-root"],
+  navigationBindings: ["emacs", "vim-motions"],
+  rootSearchSensitivity: ["low", "medium", "high"]
+}
+
+function validConfigValue(key, value) {
+  if (typeof value !== typeof configDefaults[key]) return false
+  if (configChoices[key]) return configChoices[key].indexOf(value) >= 0
+  if (typeof value === "number") return isFinite(value) && value > 0
+  return true
 }
 
 function withConfigDefaults(value) {
@@ -76,7 +100,7 @@ function withConfigDefaults(value) {
   for (var key in configDefaults) out[key] = configDefaults[key]
   if (value && typeof value === "object" && !Array.isArray(value)) {
     for (var k in value) {
-      if (configDefaults[k] !== undefined && typeof value[k] === typeof configDefaults[k]) out[k] = value[k]
+      if (configDefaults[k] !== undefined && validConfigValue(k, value[k])) out[k] = value[k]
     }
   }
   return out
@@ -91,6 +115,7 @@ if (typeof module !== "undefined") {
     SEARCH_HISTORY_LIMIT: SEARCH_HISTORY_LIMIT,
     documents: documents,
     configDefaults: configDefaults,
+    generalChoices: generalChoices,
     withConfigDefaults: withConfigDefaults
   }
 }

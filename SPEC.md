@@ -792,7 +792,14 @@ Repo layout [D]:
   - **Themes.** The 8 Raycast themes and the CSS variables are replaced by the live Omarchy theme tokens (§2.0).
   - **HUD.** The HUD is Omarchy's OSD (`omarchy-shell osd show`).
   - **Settings.** There is no settings window yet (Phase 2); aliases are set from the action panel.
-  - **Not done:** vim navigation bindings (Ctrl+K would clash with the action panel), Ctrl+P dropdown, Ctrl+T toast focus, Ctrl+Shift+K about panel, inline argument pills (no command declares arguments yet), alerts (no destructive action needs one yet), and keystroke buffering (see the note above).
+  - **Leftovers finished [D, 2026-10-22]:**
+    - **Navigation bindings.** `general.navigationBindings` = `emacs` (Ctrl+N down) or `vim-motions` (Ctrl+J/K). On Linux Ctrl replaces both ⌃ and ⌘, so vim's Ctrl+K would clash with the action panel: in vim mode the action panel moves to **Alt+K**. The search field has no text cursor, so Ctrl+B/F and Ctrl+H/L do nothing.
+    - **Ctrl+P dropdown.** Ctrl+P is always `toggleFilter`, so emacs Ctrl+P = up is dropped in the list (it still moves up inside popups). Raycast's root has no dropdown; ours filters root search by type (All / Applications / Commands, `RootSearch.FILTERS`), hides the Calculator and fallback sections while filtered, and resets on pop-to-root.
+    - **Ctrl+T** opens the toast's actions. Failure toasts offer "Copy Error Message"; "Disable Command" offers "Undo".
+    - **Ctrl+Shift+K** About panel: `rootSearch.getItemInfo` → `RootSearch.aboutFor`.
+    - **Argument pills.** Builtins may declare `arguments` (`{name, placeholder, required}`). "Search Google" and "Search DuckDuckGo" are root commands with a `query` argument. Tab enters the pills, Shift+Tab / Backspace on an empty pill goes back, ↵ with an empty required argument focuses it.
+    - **Alerts.** `rootSearch.performAction` returns `{confirm}` for Shut Down / Restart / Log Out and Delete All Entries until called with `confirmed: true`. `oma-cast run` is explicit and skips it.
+    - **Keystroke buffering: won't do.** A parked surface conflicts with Omarchy's remap-on-open design (note above).
   - **"fir" → Firefox:** on a list where another title starts with "Fire", the literal port ties at score 8 and the collator decides until Firefox has been launched once (`tests/ranker.test.js`).
 
 ### Phase 2: Core built-ins

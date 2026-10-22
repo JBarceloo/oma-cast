@@ -6,6 +6,7 @@ Rectangle {
 
   property var actions: []
   property string filter: ""
+  property string placeholder: "Search for actions…"
   property int selectedIndex: 0
   property var look: null
   property real zoom: 1
@@ -152,7 +153,7 @@ Rectangle {
       anchors.rightMargin: panel.px(14)
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
-      text: panel.filter || "Search for actions…"
+      text: panel.filter || panel.placeholder
       opacity: panel.filter ? 1 : 0.45
       color: panel.look.foreground
       elide: Text.ElideLeft

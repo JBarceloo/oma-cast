@@ -5,6 +5,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "../core/Agent.js" as Agent
+import "../core/RootSearch.js" as RootSearch
 
 // Omarchy 4.0.x dropped qs.Ui.OverlayWindow; this is the same full-screen
 // overlay layer the shell's own emoji picker uses.
@@ -28,7 +29,7 @@ PanelWindow {
   readonly property var general: {
     window.backend.storeRevision
     var r = window.backend.ready ? window.backend.callSync("settings.getGeneralSettings", null) : null
-    return r && r.ok ? r.data : ({ uiZoom: 1, windowMode: "expanded", escapeKeyBehavior: "pop-back-or-close", popToRootTimeout: 90 })
+    return r && r.ok ? r.data : ({ uiZoom: 1, windowMode: "expanded", escapeKeyBehavior: "pop-back-or-close", popToRootTimeout: 90, navigationBindings: "emacs" })
   }
   readonly property real zoom: window.general.uiZoom > 0 ? window.general.uiZoom : 1
   function px(value) { return Math.round(Style.space(value) * window.zoom) }
@@ -52,6 +53,29 @@ PanelWindow {
   property var toast: null
   property int historyIndex: -1
 
+  // Ctrl+P root filter (RootSearch.FILTERS), Ctrl+T toast actions,
+  // Ctrl+Shift+K About panel and the confirm alert.
+  property string rootFilter: "all"
+  property bool dropdownOpen: false
+  property bool toastPanelOpen: false
+  property bool aboutOpen: false
+  property var aboutRows: []
+  property var alert: null
+
+  // Inline argument pills for the selected command: argFocus -1 is the
+  // search field, 0.. an argument.
+  property var argDefs: []
+  property var argValues: ({})
+  property int argFocus: -1
+  property string argsForId: ""
+
+  // Navigation bindings (ref 04 §2.8): emacs moves with Ctrl+N (Ctrl+P is the
+  // dropdown); vim-motions with Ctrl+J/K, which moves the action panel to
+  // Alt+K. Ctrl+B/F and Ctrl+H/L move a text cursor in Raycast; our search
+  // field has none, so they do nothing here. [D]
+  readonly property bool vim: window.general.navigationBindings === "vim-motions"
+  readonly property string actionPanelKeys: window.vim ? "Alt K" : "Ctrl K"
+
   readonly property bool atRoot: window.stack.length === 1
   readonly property bool compact: window.general.windowMode === "compact" && window.atRoot && !window.query
   readonly property string placeholder: window.view.kind === "alias" ? "Type an alias, then press ↵"
@@ -72,10 +96,18 @@ PanelWindow {
   }
 
 
+  function closePopups() {
+    window.actionPanelOpen = false
+    window.dropdownOpen = false
+    window.toastPanelOpen = false
+    window.aboutOpen = false
+    window.alert = null
+  }
+
   function prepare(payload) {
     popTimer.stop()
     if (typeof payload.query === "string") window.query = payload.query
-    window.actionPanelOpen = false
+    window.closePopups()
     window.historyIndex = -1
     window.rebuild(true)
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -83,7 +115,7 @@ PanelWindow {
 
   onShownChanged: {
     if (window.shown) return
-    window.actionPanelOpen = false
+    window.closePopups()
     var seconds = Number(window.general.popToRootTimeout)
     if (!(seconds > 0)) window.popToRoot()
     else { popTimer.interval = seconds * 1000; popTimer.restart() }
@@ -97,6 +129,7 @@ PanelWindow {
   function popToRoot() {
     window.stack = [{ kind: "root", title: "oma-cast", query: "" }]
     window.query = ""
+    window.rootFilter = "all"
     window.rebuild(true)
   }
 
@@ -125,7 +158,7 @@ PanelWindow {
     var keepId = !resetSelection && window.selectedRow ? window.selectedRow.itemId : ""
     rows.clear()
     if (window.view.kind === "alias") { window.select(-1); return }
-    var result = window.backend.callSync("rootSearch.search", { query: window.query, view: window.view })
+    var result = window.backend.callSync("rootSearch.search", { query: window.query, view: window.view, filter: window.atRoot ? window.rootFilter : "all" })
     if (!result.ok) {
       window.showToast("failure", result.error)
       window.select(-1)
@@ -161,7 +194,8 @@ PanelWindow {
       calcInput: String(c.calcInput || ""),
       calcResult: String(c.calcResult || ""),
       calcInputCaption: String(c.calcInputCaption || ""),
-      calcResultCaption: String(c.calcResultCaption || "")
+      calcResultCaption: String(c.calcResultCaption || ""),
+      argsJson: JSON.stringify(c.arguments || [])
     }
   }
 
@@ -179,6 +213,14 @@ PanelWindow {
   function select(index) {
     window.selectedIndex = index
     window.selectedRow = index >= 0 && index < rows.count ? rows.get(index) : null
+    // Argument values belong to one command; a different row starts empty.
+    var id = window.selectedRow ? window.selectedRow.itemId : ""
+    if (id !== window.argsForId) {
+      window.argsForId = id
+      window.argValues = ({})
+      window.argFocus = -1
+    }
+    window.argDefs = window.selectedRow && window.selectedRow.argsJson ? JSON.parse(window.selectedRow.argsJson) : []
     if (index >= 0) list.positionViewAtIndex(index, ListView.Contain)
     if (index === window.nextSelectable(-1, 1)) list.positionViewAtBeginning()
   }
@@ -226,20 +268,37 @@ PanelWindow {
   function perform(actionId, index) {
     if (index !== undefined && index >= 0) window.select(index)
     if (!window.selectedRow) return
-    var id = window.selectedRow.itemId
     window.actionPanelOpen = false
-    var r = window.backend.callSync("rootSearch.performAction", { id: id, action: actionId, query: window.query })
+    // ↵ on a command with an empty required argument focuses that pill.
+    if (actionId === "open" && window.argDefs.length) {
+      var missing = RootSearch.missingArgument(window.argDefs, window.argValues)
+      if (missing >= 0) { window.argFocus = missing; return }
+    }
+    window.request({ id: window.selectedRow.itemId, action: actionId, query: window.query, arguments: window.argValues })
+  }
+
+  function request(payload) {
+    var r = window.backend.callSync("rootSearch.performAction", payload)
     if (!r.ok) { window.showToast("failure", r.error); return }
     var outcome = r.data || {}
+    if (outcome.confirm) { window.alert = { spec: outcome.confirm, payload: payload }; return }
     if (outcome.push) { window.push(outcome.push); return }
     if (outcome.close) {
       if (outcome.hud) window.hud(outcome.hud)
       window.dismissRequested()
+      window.argValues = ({})
+      window.argFocus = -1
       if (window.atRoot) window.setQuery("")
       return
     }
-    if (outcome.toast) window.showToast(outcome.toast.style, outcome.toast.title)
+    if (outcome.toast) window.showToast(outcome.toast.style, outcome.toast.title, outcome.toast.actions)
     window.rebuild(false)
+  }
+
+  function confirmAlert() {
+    var payload = Object.assign({}, window.alert.payload, { confirmed: true })
+    window.alert = null
+    window.request(payload)
   }
 
   function performNth(n) {
@@ -260,6 +319,77 @@ PanelWindow {
     window.actionPanelOpen = window.actions.length > 0
   }
 
+  function toggleDropdown() {
+    if (window.dropdownOpen || !window.atRoot) { window.dropdownOpen = false; return }
+    dropdown.filter = ""
+    window.dropdownOpen = true
+    var at = RootSearch.FILTERS.map(function(f) { return f.id }).indexOf(window.rootFilter)
+    dropdown.selectedIndex = Math.max(0, at)
+  }
+
+  function setRootFilter(id) {
+    window.dropdownOpen = false
+    if (window.rootFilter === id) return
+    window.rootFilter = id
+    window.rebuild(true)
+  }
+
+  function toggleAbout() {
+    if (window.aboutOpen || !window.selectedRow) { window.aboutOpen = false; return }
+    var r = window.backend.callSync("rootSearch.getItemInfo", { id: window.selectedRow.itemId, query: window.query })
+    if (!r.ok) { window.showToast("failure", r.error); return }
+    window.aboutRows = r.data
+    window.aboutOpen = r.data.length > 0
+  }
+
+  function toggleToastPanel() {
+    if (window.toastPanelOpen) { window.toastPanelOpen = false; toastTimer.restart(); return }
+    if (!window.toast || !window.toast.actions.length) return
+    toastPanel.filter = ""
+    window.toastPanelOpen = true
+    toastTimer.stop()
+  }
+
+  // A toast action is a copy or a backend call (Backend.performAction's
+  // toast.actions), with `done` as the success toast.
+  function runToastAction(actionId) {
+    var action = (window.toast ? window.toast.actions : []).filter(function(a) { return a.id === actionId })[0]
+    window.toastPanelOpen = false
+    if (!action) return
+    if (action.copy !== undefined) {
+      Util.execArgv(["wl-copy", "--", action.copy])
+      window.showToast("success", "Copied to Clipboard")
+      return
+    }
+    var r = window.backend.callSync(action.call.method, action.call.data)
+    if (!r.ok) { window.showToast("failure", r.error); return }
+    window.toast = null
+    window.rebuild(false)
+    if (action.done) window.showToast("success", action.done)
+  }
+
+  // Typing, Tab and Backspace while an argument pill has focus.
+  function handleArgumentKey(event, shift) {
+    var def = window.argDefs[window.argFocus]
+    var value = window.argValues[def.name] || ""
+    var key = event.key
+    function set(next) {
+      var values = Object.assign({}, window.argValues)
+      values[def.name] = next
+      window.argValues = values
+    }
+    if (key === Qt.Key_Tab || key === Qt.Key_Backtab) {
+      var step = shift || key === Qt.Key_Backtab ? -1 : 1
+      var next = window.argFocus + step
+      window.argFocus = next >= window.argDefs.length ? 0 : next
+      return true
+    }
+    if (key === Qt.Key_Backspace && !value) { window.argFocus--; return true }
+    if (Util.editsFilter(event, value)) { set(Util.editedFilter(event, value)); return true }
+    if (window.isTyping(event)) { set(value + event.text); return true }
+    return false
+  }
+
   function askAgent() {
     var r = window.backend.callSync("rootSearch.performAction", { id: Agent.FALLBACK_ID, action: "open", query: window.query })
     if (!r.ok) window.showToast("failure", r.error)
@@ -275,15 +405,20 @@ PanelWindow {
   }
 
 
-  function showToast(style, title) {
-    window.toast = { style: style, title: String(title || "") }
+  // A failure toast always offers its message to copy (Ctrl+T).
+  function showToast(style, title, actions) {
+    var list = (actions || []).slice()
+    if (style === "failure") list.push({ id: "copy-error", title: "Copy Error Message", copy: String(title || "") })
+    window.toastPanelOpen = false
+    window.toast = { style: style, title: String(title || ""), actions: list }
+    toastTimer.interval = list.length ? 6000 : 2500
     toastTimer.restart()
   }
 
   Timer {
     id: toastTimer
     interval: 2500
-    onTriggered: window.toast = null
+    onTriggered: if (!window.toastPanelOpen) window.toast = null
   }
 
   function hud(text) {
@@ -316,7 +451,12 @@ PanelWindow {
   }
 
   function handleEscape(shift) {
+    if (window.alert) { window.alert = null; return }
+    if (window.aboutOpen) { window.aboutOpen = false; return }
+    if (window.dropdownOpen) { window.dropdownOpen = false; return }
+    if (window.toastPanelOpen) { window.toggleToastPanel(); return }
     if (window.actionPanelOpen) { window.actionPanelOpen = false; return }
+    if (window.argFocus >= 0 && !shift) { window.argFocus = -1; return }
     if (shift) { window.popToRoot(); return }
     if (window.general.escapeKeyBehavior === "close-and-pop-to-root") {
       window.dismissRequested()
@@ -328,6 +468,32 @@ PanelWindow {
     else window.dismissRequested()
   }
 
+  // -1 up, 1 down or 0, per the navigation bindings. Ctrl+P only moves up
+  // inside popups: in the list it opens the dropdown.
+  function direction(event, ctrl, alt, inPopup) {
+    var key = event.key
+    if (!ctrl && !alt && key === Qt.Key_Down) return 1
+    if (!ctrl && !alt && key === Qt.Key_Up) return -1
+    if (!ctrl || alt || (event.modifiers & Qt.ShiftModifier)) return 0
+    if (window.vim) return key === Qt.Key_J ? 1 : (key === Qt.Key_K ? -1 : 0)
+    return key === Qt.Key_N ? 1 : (key === Qt.Key_P && inPopup ? -1 : 0)
+  }
+
+  function isActionPanelKey(ctrl, alt, shift, key) {
+    if (key !== Qt.Key_K || shift) return false
+    return window.vim ? alt && !ctrl : ctrl && !alt
+  }
+
+  // Keys for a popup list (action panel, dropdown, toast actions).
+  function handlePopupKey(event, panel, ctrl, alt) {
+    var dir = window.direction(event, ctrl, alt, true)
+    if (dir) { panel.move(dir); return true }
+    if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { panel.activateSelected(); return true }
+    if (Util.editsFilter(event, panel.filter)) { panel.filter = Util.editedFilter(event, panel.filter); return true }
+    if (window.isTyping(event)) { panel.filter += event.text; return true }
+    return true
+  }
+
   function handleKey(event) {
     var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
     var shift = (event.modifiers & Qt.ShiftModifier) !== 0
@@ -335,20 +501,32 @@ PanelWindow {
     var key = event.key
     var enter = key === Qt.Key_Return || key === Qt.Key_Enter
 
+    if (window.alert) {
+      if (key === Qt.Key_Escape) window.alert = null
+      else if (enter) window.confirmAlert()
+      return true
+    }
     if (key === Qt.Key_Escape) { window.handleEscape(shift); return true }
     if (ctrl && (key === Qt.Key_Plus || key === Qt.Key_Equal)) { window.setZoom(window.zoom + 0.1); return true }
     if (ctrl && key === Qt.Key_Minus) { window.setZoom(window.zoom - 0.1); return true }
     if (ctrl && key === Qt.Key_0) { window.setZoom(1); return true }
-    if (ctrl && key === Qt.Key_BracketLeft) { window.pop(); return true }
+    if (ctrl && key === Qt.Key_BracketLeft) { window.closePopups(); window.pop(); return true }
 
-    if (window.actionPanelOpen) {
-      if (ctrl && key === Qt.Key_K) { window.actionPanelOpen = false; return true }
-      if (key === Qt.Key_Down || (ctrl && key === Qt.Key_N)) { actionPanel.move(1); return true }
-      if (key === Qt.Key_Up || (ctrl && key === Qt.Key_P)) { actionPanel.move(-1); return true }
-      if (enter) { actionPanel.activateSelected(); return true }
-      if (Util.editsFilter(event, actionPanel.filter)) { actionPanel.filter = Util.editedFilter(event, actionPanel.filter); return true }
-      if (window.isTyping(event)) { actionPanel.filter += event.text; return true }
+    if (window.aboutOpen) {
+      if (ctrl && shift && key === Qt.Key_K) window.aboutOpen = false
       return true
+    }
+    if (window.dropdownOpen) {
+      if (ctrl && !shift && key === Qt.Key_P) { window.dropdownOpen = false; return true }
+      return window.handlePopupKey(event, dropdown, ctrl, alt)
+    }
+    if (window.toastPanelOpen) {
+      if (ctrl && key === Qt.Key_T) { window.toggleToastPanel(); return true }
+      return window.handlePopupKey(event, toastPanel, ctrl, alt)
+    }
+    if (window.actionPanelOpen) {
+      if (window.isActionPanelKey(ctrl, alt, shift, key)) { window.actionPanelOpen = false; return true }
+      return window.handlePopupKey(event, actionPanel, ctrl, alt)
     }
 
     if (window.view.kind === "alias") {
@@ -356,19 +534,25 @@ PanelWindow {
       if (key === Qt.Key_Space) return true
     } else {
       if (window.atRoot && enter && ctrl && alt && !shift) { window.askAgent(); return true }
-      if (ctrl && key === Qt.Key_K) { window.toggleActionPanel(); return true }
+      if (ctrl && shift && key === Qt.Key_K) { window.toggleAbout(); return true }
+      if (window.isActionPanelKey(ctrl, alt, shift, key)) { window.toggleActionPanel(); return true }
+      if (ctrl && !shift && key === Qt.Key_P) { window.toggleDropdown(); return true }
+      if (ctrl && !shift && key === Qt.Key_T) { window.toggleToastPanel(); return true }
       if (enter && ctrl && shift) { window.performNth(2); return true }
       if (enter && ctrl) { window.performNth(1); return true }
       if (enter) { window.performNth(0); return true }
+      if (window.argFocus >= 0 && window.handleArgumentKey(event, shift)) return true
+      if (key === Qt.Key_Tab && window.argDefs.length) { window.argFocus = 0; return true }
       if (ctrl && alt && key === Qt.Key_Up) { window.performIfOffered(["favorite-up"]); return true }
       if (ctrl && alt && key === Qt.Key_Down) { window.performIfOffered(["favorite-down"]); return true }
       if (ctrl && key === Qt.Key_Up) { window.jumpSection(-1); return true }
       if (ctrl && key === Qt.Key_Down) { window.jumpSection(1); return true }
-      if (key === Qt.Key_Up || (ctrl && key === Qt.Key_P)) {
+      var dir = window.direction(event, ctrl, alt, false)
+      if (dir < 0) {
         if (window.atRoot && (window.query === "" || window.historyIndex >= 0) && window.selectedIndex === window.nextSelectable(-1, 1) && window.recallHistory(1)) return true
         window.move(-1); return true
       }
-      if (key === Qt.Key_Down || (ctrl && key === Qt.Key_N)) {
+      if (dir > 0) {
         if (window.historyIndex >= 0) { window.recallHistory(-1); return true }
         window.move(1); return true
       }
@@ -399,7 +583,7 @@ PanelWindow {
 
   Connections {
     target: window.backend
-    function onCandidatesRevisionChanged() { if (window.shown && !window.actionPanelOpen) window.rebuild(false) }
+    function onCandidatesRevisionChanged() { if (window.shown && !window.actionPanelOpen && !window.alert) window.rebuild(false) }
     function onNotification(method, data) {
       if (method === "agent.launchFailed" && window.shown) window.showToast("failure", data.message)
     }
@@ -424,7 +608,7 @@ PanelWindow {
     borderSpec: window.borderSpec
     clip: true
 
-    MouseArea { anchors.fill: parent; onClicked: { window.actionPanelOpen = false; keyCatcher.forceActiveFocus() } }
+    MouseArea { anchors.fill: parent; onClicked: { window.closePopups(); keyCatcher.forceActiveFocus() } }
 
     Item {
       id: keyCatcher
@@ -470,15 +654,17 @@ PanelWindow {
         }
       }
 
+      // Room left of the filter button; argument pills sit right after the
+      // typed text (ref 04 §2.2 WidthSizer).
+      readonly property real queryRoom: (filterButton.visible ? filterButton.x - window.px(12) : header.width - window.px(20)) - queryText.x
+
       Text {
         id: queryText
         textFormat: Text.PlainText
-        anchors.left: lead.right
-        anchors.leftMargin: window.px(12)
-        anchors.right: parent.right
-        anchors.rightMargin: window.px(20)
+        x: lead.x + lead.width + window.px(12)
+        width: Math.min(implicitWidth, header.queryRoom - (pills.visible ? pills.width + window.px(10) : 0))
         anchors.verticalCenter: parent.verticalCenter
-        text: window.query || window.placeholder
+        text: window.query || (pills.visible ? "" : window.placeholder)
         color: window.look.foreground
         opacity: window.query ? 1 : 0.45
         font.family: window.look.fontFamily
@@ -492,7 +678,7 @@ PanelWindow {
         anchors.verticalCenter: parent.verticalCenter
         x: queryText.x + (window.query ? Math.min(queryText.contentWidth, queryText.width) + Style.space(1) : 0)
         color: window.look.accent
-        visible: window.shown && !window.actionPanelOpen
+        visible: window.shown && !window.actionPanelOpen && window.argFocus < 0
 
         SequentialAnimation on opacity {
           running: window.shown
@@ -501,6 +687,107 @@ PanelWindow {
           PauseAnimation { duration: 530 }
           NumberAnimation { to: 0; duration: 0 }
           PauseAnimation { duration: 530 }
+        }
+      }
+
+      Row {
+        id: pills
+        visible: window.argDefs.length > 0 && window.view.kind !== "alias"
+        x: queryText.x + (window.query ? queryText.width : 0) + window.px(10)
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: window.px(6)
+
+        Repeater {
+          model: pills.visible ? window.argDefs : []
+
+          Rectangle {
+            id: pill
+            required property var modelData
+            required property int index
+            readonly property string value: window.argValues[modelData.name] || ""
+            readonly property bool focused: window.argFocus === index
+            height: window.px(28)
+            width: Math.min(window.px(220), pillText.implicitWidth + window.px(20))
+            radius: Math.max(Style.cornerRadius, window.px(6))
+            color: Util.alpha(window.look.foreground, pill.focused ? 0.12 : 0.06)
+            border.width: 1
+            border.color: pill.focused ? window.look.accent : Util.alpha(window.look.foreground, 0.15)
+
+            Text {
+              id: pillText
+              anchors.left: parent.left
+              anchors.leftMargin: window.px(10)
+              anchors.right: parent.right
+              anchors.rightMargin: window.px(10)
+              anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.PlainText
+              text: pill.value || (pill.modelData.placeholder + (pill.modelData.required ? "" : " (optional)"))
+              opacity: pill.value ? 1 : 0.5
+              color: window.look.foreground
+              elide: Text.ElideLeft
+              font.family: window.look.fontFamily
+              font.pixelSize: Math.round(Style.font.body * window.zoom)
+            }
+
+            Rectangle {
+              visible: pill.focused && window.shown
+              width: Math.max(1, Style.space(2))
+              height: pillText.font.pixelSize + Style.space(2)
+              anchors.verticalCenter: parent.verticalCenter
+              x: pillText.x + (pill.value ? Math.min(pillText.contentWidth, pillText.width) + Style.space(1) : 0)
+              color: window.look.accent
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.IBeamCursor
+              onClicked: { window.argFocus = pill.index; keyCatcher.forceActiveFocus() }
+            }
+          }
+        }
+      }
+
+      Rectangle {
+        id: filterButton
+        visible: window.atRoot && !window.compact
+        anchors.right: parent.right
+        anchors.rightMargin: window.px(16)
+        anchors.verticalCenter: parent.verticalCenter
+        height: window.px(28)
+        width: filterRow.implicitWidth + window.px(20)
+        radius: Math.max(Style.cornerRadius, window.px(6))
+        color: Util.alpha(window.look.foreground, window.dropdownOpen ? 0.12 : 0.06)
+        border.width: 1
+        border.color: Util.alpha(window.look.foreground, 0.12)
+
+        Row {
+          id: filterRow
+          anchors.centerIn: parent
+          spacing: window.px(6)
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            text: (RootSearch.FILTERS.filter(function(f) { return f.id === window.rootFilter })[0] || RootSearch.FILTERS[0]).title
+            color: window.look.foreground
+            opacity: window.rootFilter === "all" ? 0.7 : 1
+            font.family: window.look.fontFamily
+            font.pixelSize: Math.round(Style.font.bodySmall * window.zoom)
+          }
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            text: "▾"
+            color: window.look.foreground
+            opacity: 0.6
+            font.pixelSize: Math.round(Style.font.bodySmall * window.zoom)
+          }
+        }
+
+        MouseArea {
+          anchors.fill: parent
+          cursorShape: Qt.PointingHandCursor
+          onClicked: { window.toggleDropdown(); keyCatcher.forceActiveFocus() }
         }
       }
 
@@ -637,8 +924,17 @@ PanelWindow {
           text: window.toast ? window.toast.title : window.view.title
           color: window.look.foreground
           opacity: window.toast ? 0.9 : 0.6
+          elide: Text.ElideRight
+          width: Math.min(implicitWidth, footer.width / 2)
           font.family: window.look.fontFamily
           font.pixelSize: Math.round(Style.font.bodySmall * window.zoom)
+        }
+        KeyHint {
+          visible: !!window.toast && window.toast.actions.length > 0
+          anchors.verticalCenter: parent.verticalCenter
+          keys: "Ctrl T"
+          color: window.look.foreground
+          zoom: window.zoom
         }
       }
 
@@ -693,7 +989,7 @@ PanelWindow {
         KeyHint {
           visible: window.view.kind !== "alias"
           anchors.verticalCenter: parent.verticalCenter
-          keys: "Ctrl K"
+          keys: window.actionPanelKeys
           color: window.look.foreground
           zoom: window.zoom
         }
@@ -712,6 +1008,66 @@ PanelWindow {
       look: window.look
       zoom: window.zoom
       onActivated: function(actionId) { window.perform(actionId) }
+    }
+
+    ActionPanel {
+      id: dropdown
+      visible: window.dropdownOpen
+      z: 10
+      width: window.px(240)
+      anchors.right: parent.right
+      anchors.rightMargin: card.borderRight + window.px(10)
+      anchors.top: header.bottom
+      anchors.topMargin: window.px(4)
+      placeholder: "Filter…"
+      actions: RootSearch.FILTERS.map(function(f) {
+        return { id: f.id, title: f.title, shortcut: "", section: "filter", icon: f.id === window.rootFilter ? "✓" : " " }
+      })
+      look: window.look
+      zoom: window.zoom
+      onActivated: function(id) { window.setRootFilter(id) }
+    }
+
+    ActionPanel {
+      id: toastPanel
+      visible: window.toastPanelOpen
+      z: 10
+      width: window.px(280)
+      anchors.left: parent.left
+      anchors.leftMargin: card.borderLeft + window.px(10)
+      anchors.bottom: footer.top
+      anchors.bottomMargin: window.px(6)
+      placeholder: "Search toast actions…"
+      actions: (window.toast ? window.toast.actions : []).map(function(a) {
+        return { id: a.id, title: a.title, shortcut: "", section: "toast", icon: " " }
+      })
+      look: window.look
+      zoom: window.zoom
+      onActivated: function(id) { window.runToastAction(id) }
+    }
+
+    InfoPanel {
+      visible: window.aboutOpen
+      z: 10
+      anchors.right: parent.right
+      anchors.rightMargin: card.borderRight + window.px(10)
+      anchors.bottom: footer.top
+      anchors.bottomMargin: window.px(6)
+      title: window.selectedRow ? window.selectedRow.title : ""
+      rows: window.aboutRows
+      look: window.look
+      zoom: window.zoom
+    }
+
+    Alert {
+      visible: !!window.alert
+      z: 20
+      anchors.fill: parent
+      spec: window.alert ? window.alert.spec : null
+      look: window.look
+      zoom: window.zoom
+      onConfirmed: window.confirmAlert()
+      onCancelled: window.alert = null
     }
   }
 }

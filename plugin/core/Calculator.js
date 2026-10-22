@@ -9,6 +9,9 @@
 //   dates           3 days from now, christmas - today, days until dec 25, 2 weeks ago
 //   time zones      time in tokyo, tokyo time, 3pm london to new york   (env.zones)
 //   bases           255 to hex, 0xff + 1, 10 in binary
+//   mixed units     5 ft 3 in to cm, 1 h 30 min + 45 min
+//   work time       40 hours in work days, 2 work weeks to hours   (env.workHoursPerDay)
+//   unix time       unix 1700000000, 1700000000 to date, now to unix, unix time
 //
 // evaluate(query, env) returns null unless the query clearly is a
 // calculation: the Calculator section sits above Results and takes ↵, so a
@@ -16,7 +19,7 @@
 //
 // env: { nowMs, localOffset (minutes east of UTC), hour12,
 //        rates: {base, date, rates: {CODE: perBase}}, zones: {IANA: minutes east},
-//        remToPxRate }
+//        remToPxRate, workHoursPerDay }
 
 // ------------------------------------------------------------------ units
 
@@ -148,6 +151,10 @@ def(["mo"], ["month", "months"], T, 2629746, { long: true })
 def(["yr", "yrs", "y"], ["year", "years"], T, 31556952, { long: true })
 def([], ["decade", "decades"], T, 315569520, { long: true })
 def([], ["century", "centuries"], T, 3155695200, { long: true })
+// Work time uses Raycast's workHoursPerDay (default 8) [O pref]; a work
+// week is five work days [I].
+var WORKDAY = def([], ["work day", "work days"], T, 8 * 3600, { long: true, aliases: ["workday", "workdays"] })
+var WORKWEEK = def([], ["work week", "work weeks"], T, 40 * 3600, { long: true, aliases: ["workweek", "workweeks"] })
 
 // Temperature (affine: kelvin = (x + offset) * factor)
 def(["K"], ["kelvin", "kelvins"], { K: 1 }, 1)
@@ -470,6 +477,13 @@ function num(n, unit) { return { type: "num", n: n, unit: unit || null, pct: fal
 function pct(fraction) { return { type: "num", n: fraction, unit: null, pct: true } }
 function date(ms, hasTime) { return { type: "date", ms: ms, hasTime: !!hasTime } }
 
+// Unix time: seconds, or milliseconds from 13 digits up. [D]
+function fromUnix(n) {
+  if (Math.floor(n) !== n) throw new CalcError("not a timestamp")
+  return date(Math.abs(n) >= 1e11 ? n : n * 1000, true)
+}
+function unixValue(ms) { var v = num(Math.floor(ms / 1000)); v.unix = true; return v }
+
 // Without rates a currency still works on its own ("$30 + 20%", "$30/h ×
 // 8 h"): the factor cancels. Converting between two needs rates (convert()).
 function currencyFactor(unit) {
@@ -484,6 +498,7 @@ function currencyFactor(unit) {
 function unitFactor(unit) {
   if (unit.currency) return currencyFactor(unit)
   if (unit === REM || unit === EM) return (ENV && ENV.remToPxRate) || 16
+  if (unit === WORKDAY || unit === WORKWEEK) return ((ENV && ENV.workHoursPerDay) || 8) * 3600 * (unit === WORKWEEK ? 5 : 1)
   return unit.factor
 }
 
@@ -547,6 +562,8 @@ function isDuration(v) { return v.type === "num" && v.unit && dimsKey(v.unit.dim
 
 function addDuration(d, v, sign) {
   var unit = v.unit
+  // "3 work days from now" would mean business days, which we don't model. [D]
+  if (unit === WORKDAY || unit === WORKWEEK) throw new CalcError("work days are not calendar days")
   var n = v.n * sign
   var t = new Date(d.ms)
   // Calendar units move the calendar; the rest are exact seconds.
@@ -680,7 +697,7 @@ function nextOccurrence(mo, d) {
 function Parser(tokens) {
   this.tokens = tokens
   this.i = 0
-  this.state = { ops: 0, kind: "math", fromUnit: null, toUnit: null }
+  this.state = { ops: 0, kind: "math", fromUnit: null, toUnit: null, fromUnix: false }
 }
 
 Parser.prototype.peek = function(k) { return this.tokens[this.i + (k || 0)] || null }
@@ -689,6 +706,13 @@ Parser.prototype.atEnd = function() { return this.i >= this.tokens.length }
 Parser.prototype.isOp = function(v, k) { var t = this.peek(k); return !!t && t.t === "op" && t.v === v }
 Parser.prototype.isWord = function(w, k) { var t = this.peek(k); return !!t && t.t === "id" && t.v.toLowerCase() === w }
 Parser.prototype.expectOp = function(v) { if (!this.isOp(v)) throw new CalcError("expected " + v); this.i++ }
+
+// "unix", "unix time", "unix timestamp", "timestamp", "epoch" at the cursor:
+// how many tokens it spans, or 0.
+Parser.prototype.unixWords = function() {
+  if (this.isWord("unix")) return this.isWord("time", 1) || this.isWord("timestamp", 1) ? 2 : 1
+  return this.isWord("timestamp") || this.isWord("epoch") ? 1 : 0
+}
 
 // Longest unit at the cursor: multiword names, "sq ft", "km/h", "m^2".
 Parser.prototype.matchUnit = function(afterNumber) {
@@ -820,6 +844,19 @@ Parser.prototype.parseTarget = function(value) {
     this.state.kind = "base"
     return value
   }
+  var unixLen = this.unixWords()
+  if (unixLen && this.tokens.length === this.i + unixLen) {
+    this.i += unixLen
+    if (value.type !== "date") throw new CalcError("expected a date")
+    this.state.kind = "unix"
+    return unixValue(value.ms)
+  }
+  if (t.t === "id" && t.v.toLowerCase() === "date" && this.tokens.length === this.i + 1) {
+    this.i++
+    if (value.type !== "num" || value.unit || value.pct) throw new CalcError("expected a timestamp")
+    this.state.fromUnix = true
+    return fromUnix(value.n)
+  }
   if ((t.t === "op" && t.v === "%") || (t.t === "id" && t.v.toLowerCase() === "percent")) {
     this.i++
     if (value.type !== "num" || value.unit) throw new CalcError("bad percent")
@@ -943,7 +980,17 @@ Parser.prototype.parsePrimary = function() {
     // "in" after a number is inches unless a conversion target follows.
     if (this.isWord("in") && this.peek(1) && (this.peek(1).t === "id" || this.peek(1).t === "cur") && !this.isWord("in", 1) && !this.isWord("to", 1)) return num(t.v)
     var u = this.parseUnit(true)
-    return u ? num(t.v * u.scale, u.unit) : num(t.v)
+    if (!u) return num(t.v)
+    var quantity = num(t.v * u.scale, u.unit)
+    // "5 ft 3 in", "1 h 30 min": adjacent quantities of one dimension add up. [D]
+    while (this.peek() && this.peek().t === "num" && !this.peek().base && !quantity.unit.offset && !quantity.unit.currency) {
+      var save = this.i
+      var part = this.next()
+      var pu = this.parseUnit(true)
+      if (!pu || pu.unit.offset || pu.unit.currency || !sameDims(pu.unit.dims, quantity.unit.dims)) { this.i = save; break }
+      quantity = add(quantity, num(part.v * pu.scale, pu.unit), 1, this.state)
+    }
+    return quantity
   }
 
   if (t.t === "cur") {
@@ -981,6 +1028,26 @@ Parser.prototype.parsePrimary = function() {
     if (CONSTANTS[t.v] !== undefined || (CONSTANTS[w] !== undefined && w !== "e")) {
       if (w !== "e") this.state.ops++
       return num(CONSTANTS[t.v] !== undefined ? CONSTANTS[t.v] : CONSTANTS[w])
+    }
+    // "unix 1700000000", "timestamp 1700000000"; "unix time" / "unix now"
+    // is the current one. A bare "unix" or "epoch" is a word, not a row.
+    this.i--
+    var unixLen = this.unixWords()
+    this.i++
+    if (unixLen) {
+      this.i += unixLen - 1
+      if (this.peek() && this.peek().t === "num" && !this.peek().base) {
+        this.state.ops++
+        this.state.fromUnix = true
+        return fromUnix(this.next().v)
+      }
+      if (w === "unix" && (unixLen === 2 || this.isWord("now"))) {
+        if (this.isWord("now")) this.i++
+        this.state.ops++
+        this.state.kind = "unix"
+        return unixValue(nowMs())
+      }
+      this.i -= unixLen - 1
     }
     if (w === "now") return date(nowMs(), true)
     if (w === "today") return date(today(), false)
@@ -1149,6 +1216,10 @@ function present(v, state) {
     if (v.hasTime) text += " at " + clock(d.getHours(), d.getMinutes())
     return { display: text, copy: text, caption: relativeDays(v.ms) }
   }
+  if (v.unix) {
+    var stamp = String(v.n)
+    return { display: stamp, copy: stamp, caption: "Unix Timestamp" }
+  }
   if (v.base === "sci") {
     var e = v.n.toExponential().replace("e+", "e")
     return { display: e, copy: e, caption: "Scientific Notation" }
@@ -1257,7 +1328,7 @@ function numberWords(n) {
 
 // ------------------------------------------------------------------- API
 
-var KIND_CAPTIONS = { math: "Expression", percentage: "Percentage", date: "Date", base: "Number" }
+var KIND_CAPTIONS = { math: "Expression", percentage: "Percentage", date: "Date", base: "Number", unix: "Date" }
 
 function evaluate(query, env) {
   var q = String(query || "").trim()
@@ -1279,7 +1350,7 @@ function evaluate(query, env) {
     if (value.type === "date" && !isFinite(value.ms)) return null
     var shown = present(value, state)
     var kind = value.type === "date" ? "date" : state.kind
-    var inputCaption = KIND_CAPTIONS[kind] || ""
+    var inputCaption = state.fromUnix ? "Unix Timestamp" : (KIND_CAPTIONS[kind] || "")
     if ((kind === "conversion" || kind === "currency") && state.fromUnit) {
       inputCaption = state.fromUnit.currency
         ? present(num(1, state.fromUnit), state).caption

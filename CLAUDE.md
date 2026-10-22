@@ -50,7 +50,7 @@ To learn the host, read the shell's own code in `$OMARCHY_PATH/shell/` (`/usr/sh
 SPEC.md, reference/      # the spec
 plugin/                  # the Omarchy shell plugin (what gets linked into ~/.config/omarchy/plugins/)
   manifest.json          #   id typecraft.oma-cast, kind "menu" (so the shell passes shell.appLibrary), keepLoaded
-  Launcher.qml           #   entry point: open()/close() from the shell, ShellIpc "oma-cast", GlobalShortcut oma-cast:toggle
+  Launcher.qml           #   entry point: open()/close() from the shell, IpcHandler "oma-cast", GlobalShortcut oma-cast:toggle
   Backend.qml            #   in-process backend: paths, config.json, stores, method registry, notifications
   ui/                    #   launcher surface and (later) views
   services/              #   QML services that do I/O (JsonStore, OmarchyMenuSource; later clipboard, …)
@@ -114,7 +114,12 @@ Works:
 - **Providers:** apps from `shell.appLibrary`, the whole Omarchy menu (about 400 items, with breadcrumbs, guards, ✓ state and font/power-profile provider rows), and the built-in "Omarchy Menu".
 - **Ranking state:** frecency (+100 per launch, 10-day half-life) and learned search terms in `db/frecency.json`. Aliases (exact → top; duplicates rejected), favourites (Ctrl+Shift+F, reorder Ctrl+Alt+↑↓) and disabled commands live in `db/settings.json` `commands`.
 - **Navigation:** pushed Omarchy submenus (search within them), the alias editor, back with Esc / Ctrl+[ / Backspace on an empty query / the header arrow, and Shift+Esc to pop to root.
-- **Keyboard:** Ctrl+K action panel (filterable, per-row shortcuts), ↵ / Ctrl+↵ / Ctrl+Shift+↵ for the first three actions, Ctrl+1–9, Ctrl+↑↓ to jump sections, PageUp/PageDown, Ctrl+N/P (emacs), ↑ on an empty root for search history, Ctrl+Shift+C copy, Alt+Shift+D disable, Ctrl + / − / 0 zoom.
+- **Keyboard:** Ctrl+K action panel (filterable, per-row shortcuts), ↵ / Ctrl+↵ / Ctrl+Shift+↵ for the first three actions, Ctrl+1–9, Ctrl+↑↓ to jump sections, PageUp/PageDown, ↑ on an empty root for search history, Ctrl+Shift+C copy, Alt+Shift+D disable, Ctrl + / − / 0 zoom.
+  - Navigation bindings (`general.navigationBindings`): `emacs` moves down with Ctrl+N; `vim-motions` moves with Ctrl+J/K and puts the action panel on **Alt+K**. Set it with `oma-cast call settings.updateGeneralSettings '{"navigationBindings":"vim-motions"}'`.
+  - **Ctrl+P** opens the root dropdown (All / Applications / Commands); emacs Ctrl+P = up only works inside popups.
+  - **Ctrl+T** opens the toast's actions (Copy Error Message on failures, Undo after Disable Command). **Ctrl+Shift+K** opens the About panel for the selected row.
+  - **Argument pills:** "Search Google" / "Search DuckDuckGo" take a query in a pill after the search text (Tab in, Shift+Tab out).
+  - **Alerts:** Shut Down, Restart, Log Out and Delete All Entries ask first (↵ confirms, Esc cancels). `oma-cast run` skips the alert.
 - **Feedback:** toasts in the footer, a HUD through Omarchy's OSD when the window closes, and a 2 px loading bar while guards and providers refresh (on every open, about 250 ms in the background).
 - **Window behaviour:**
   - The `escapeKeyBehavior` setting works both ways.
@@ -130,26 +135,25 @@ Works:
   - dates (`3 days from now`, `days until christmas`)
   - time zones (`time in tokyo`, `3pm london to nyc`; offsets come from one bash `printf %(%z)T` pass because QML has no Intl)
   - bases (`255 to hex`)
+  - mixed units (`5 ft 3 in to cm`, `1 h 30 min + 45 min`)
+  - work time (`40 hours in work days`, a work week is 5 days)
+  - Unix time (`unix 1700000000`, `1700000000 to date`, `now to unix`, `unix time`)
+
+  config.json sets `remToPxRate` (16), `workHoursPerDay` (8) and `clockFormat` (`auto` follows the Qt locale, or `12h` / `24h`).
 
   ↵ copies the answer (HUD), Ctrl+↵ pastes it through `omarchy-clipboard-paste-text`, Ctrl+Shift+C copies "question = answer". Each one saves to **Calculator History** (`db/calculator.json`, 4096 rows / 90 days): a built-in command and pushed view, searchable, Ctrl+D deletes an entry, Ctrl+Shift+D deletes all. RPC: `calculator.calculate|historyGetAll|historyDelete|historyDeleteAll|refreshCurrencies|getCurrencies`. A bare number, word or quantity (`42`, `firefox`, `5 kg`) never produces a row, because the section takes ↵.
-- **Latency:** show → mapped in 37–44 ms, hide in 9–25 ms (`tests/smoke.sh`).
+- **Latency:** show → mapped in 59–66 ms, hide in 24–42 ms on Omarchy 4.0.6 (`tests/smoke.sh`; it was 37–44 ms on the old `OverlayWindow`).
 - **Tests:** root search, calculator and default-agent hand-off coverage (`node --test tests/*.test.js`).
 
 **Default-agent hand-off (fork, 2026-10-20):** user-authorized addition outside the original phase plan. The root fallback "Ask default agent" and Ctrl+Alt+Enter pass the query to `omarchy-agent --prompt` as a literal argv element. `AgentLauncher.qml` checks the configured agent/terminal with a bounded, question-free preflight, prevents overlapping submissions and cancels on hide/unload. `Launcher.qml` dismisses the overlay before launching through `Util.execArgv`. Errors leave the query visible. There are no new dependencies, model APIs, credentials or question-history writes. Existing CLI approval behaviour is inherited. Portable checks do not establish live terminal focus, authentication, or provider compatibility; verify those on Omarchy.
 
 Stubbed / not yet:
-- Keystroke buffering before the surface maps. Keys sent within ~40 ms of the hotkey go to the window underneath.
-- Vim navigation bindings, Ctrl+P dropdown, Ctrl+T, Ctrl+Shift+K, inline argument pills, alerts.
-- No settings window, so you can't re-enable a disabled command except by editing `~/.local/share/oma-cast/db/settings.json` (delete its `enabled: false`). That's Phase 2.
+- No settings window, so you can't re-enable a disabled command except with Undo on the toast (Ctrl+T) or by editing `~/.local/share/oma-cast/db/settings.json` (delete its `enabled: false`). That's Phase 2.
 - No deep links (`oma-cast://`); Phase 2 or 9.
-- Calculator gaps:
-  - Color, Weather and Flight inline results
-  - pinning history entries, a history detail pane
-  - `remToPxRate` and `workHoursPerDay` settings (16 and 8 are fixed)
-  - mixed units (`5 ft 3 in`), crypto, the unix timestamp
-  - a 24-hour clock only if the Qt locale says so
 
-  Trig takes radians unless given `°`/`deg` [D].
+Won't do (decided 2026-10-22):
+- Keystroke buffering. Keys sent within ~40 ms of the hotkey go to the window underneath; fixing it needs a parked surface, which Omarchy avoids (SPEC §12 Phase 1).
+- Calculator: Color, Weather and Flight results, crypto, pinned history entries and a history detail pane. Trig takes radians unless given `°`/`deg` [D].
 
 Deviations from the original spec (SPEC §2.0 and the Phase 1 note in §12):
 - A Quickshell plugin instead of Tauri + Node; there's no NDJSON supervisor until Phase 5.
