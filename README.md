@@ -88,6 +88,7 @@ need live desktop validation.
 |---|---|
 | `↵` / `Ctrl+↵` / `Ctrl+Shift+↵` | Run the first, second or third action |
 | `Ctrl+K` | Open the action panel |
+| `Super+V` / `Ctrl+V` / `Ctrl+Shift+V` / `Shift+Insert` | Paste text into the query (also accepts clipboard-history selections) |
 | `Ctrl+Alt+↵` | Ask the default agent using the current root-search text |
 | `Ctrl+1`…`9` | Pick a result |
 | `↑` on an empty search | Search history |
